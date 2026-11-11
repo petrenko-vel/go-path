@@ -51,7 +51,7 @@ const STAT={new:'не начата',wip:'в работе',done:'освоена',
 // ---------- состояние ----------
 const KEY='gopath.v1';
 let storageOK=true;
-function defaults(){return {v:1,status:{'s0-0':'done'},doneAt:{'s0-0':'2026-11-10'},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],practice:{},practiceAt:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
+function defaults(){return {v:1,status:{'s0-0':'done'},doneAt:{'s0-0':'2026-11-10'},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],code:{},termHide:false,practice:{},practiceAt:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
 function load(){
  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);return Object.assign(defaults(),o)}}catch(e){storageOK=false}
  return defaults();
@@ -59,6 +59,7 @@ function load(){
 let S=load();
 if(!S.practice||typeof S.practice!=='object')S.practice={};
 if(!S.practiceAt||typeof S.practiceAt!=='object')S.practiceAt={};
+if(!S.code||typeof S.code!=='object')S.code={};
 if(!S.track||typeof S.track!=='object')S.track={days:{},hours:{},topics:{},visits:[]};
 ['days','hours','topics'].forEach(k=>{if(!S.track[k])S.track[k]={}});if(!Array.isArray(S.track.visits))S.track.visits=[];
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storageOK=false;banner()}}
@@ -113,9 +114,11 @@ function render(){
  document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage')&&k==='map')a.setAttribute('aria-current','page')});
  const m=$('#main');
  const fn={home:vHome,map:vMap,stage:vStage,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
+ m.className='wrap'+(route==='topic'?' wide':'');
  m.innerHTML=fn();
  if(route==='calendar')bindCalendar();
  if(route==='materials')applyMatFilter();
+ if(route==='topic')updateGutter();
  window.scrollTo(0,0);
  renderTimer();
 }
@@ -354,10 +357,10 @@ function vTopic(){
  const tile=(ic,ttl,txt)=>'<div class="ttile"><div class="tt"><span class="ti">'+ic+'</span><b>'+ttl+'</b></div><p>'+esc(txt)+'</p></div>';
  const tiles='<div class="ttiles">'+tile('🎯','Что понять',t.what)+tile('💡','Зачем это нужно',t.why)+tile('✅','Как проверить себя',t.verify)+'</div>';
  const bottomNav='<div class="topicnav">'+(pv?'<a class="tn prev" data-act="opennote" href="#t-'+pv.id+'"><span class="small mute">← Предыдущая тема</span><b>'+esc(pv.title)+'</b></a>':'<span></span>')+(nx?'<a class="tn next" data-act="opennote" href="#t-'+nx.id+'"><span class="small mute">Следующая тема →</span><b>'+esc(nx.title)+'</b></a>':'<span></span>')+'</div>';
- return '<div class="row topnav"><a href="#st-'+t.stage+'">← Этап '+t.stage+'. '+esc(STAGES[t.stage].title)+'</a><span class="sp"></span>'+(pv?'<a class="btn sm" data-act="opennote" href="#t-'+pv.id+'" title="'+esc(pv.title)+'">← Предыдущая</a>':'')+(nx?'<a class="btn sm" data-act="opennote" href="#t-'+nx.id+'" title="'+esc(nx.title)+'">Следующая →</a>':'')+'</div>'
- +hero+tiles
+ return '<div class="row topnav"><a href="#st-'+t.stage+'">← Этап '+t.stage+'. '+esc(STAGES[t.stage].title)+'</a><span class="sp"></span>'+(S.termHide?'<button class="btn sm" data-act="termtoggle">Открыть терминал</button>':'')+(pv?'<a class="btn sm" data-act="opennote" href="#t-'+pv.id+'" title="'+esc(pv.title)+'">← Предыдущая</a>':'')+(nx?'<a class="btn sm" data-act="opennote" href="#t-'+nx.id+'" title="'+esc(nx.title)+'">Следующая →</a>':'')+'</div>'
+ +'<div class="tlayout'+(S.termHide?' noterm':'')+'"><div class="tcol">'+hero+tiles
  +'<div class="tabs" role="tablist">'+tabs.map(x=>'<button class="btn sm'+(topicTab===x[0]?' on':'')+'" role="tab" aria-selected="'+(topicTab===x[0])+'" data-act="tab" data-tab="'+x[0]+'">'+x[1]+'</button>').join('')+'</div>'
- +'<div class="card">'+body+'</div>'+bottomNav;
+ +'<div class="card">'+body+'</div>'+bottomNav+'</div>'+(S.termHide?'':terminalHtml(t))+'</div>';
 }
 function topicOptions(sel){return '<option value="">— без темы —</option>'+STAGES.map(st=>'<optgroup label="Этап '+st.id+'">'+TOPICS.filter(t=>t.stage===st.id).map(t=>'<option value="'+t.id+'"'+(t.id===sel?' selected':'')+'>'+esc(t.title)+'</option>').join('')+'</optgroup>').join('')}
 // ---------- практика: задания берутся из конспекта, вводить ничего не нужно ----------
@@ -579,6 +582,9 @@ document.addEventListener('click',e=>{
  if(['tgo','treset','tmode'].includes(a)){timerAct(a,el);return}
  if(a==='status'){const y=scrollY;setStatus(id,el.dataset.st);render();if(route==='stage')scrollTo(0,y)}
  else if(a==='opennote'){topicTab='note';if(el.dataset.st)setStatus(id,el.dataset.st)}
+ else if(a==='runcode'){runCode()}
+ else if(a==='resetcode'){const id=$('#term').dataset.id;delete S.code[id];save();const ta=$('#codeed');ta.value=starterCode(TBY[id]);updateGutter();$('#termout').textContent='';const st=$('#termstatus');st.className='term-st';st.textContent='Код сброшен к примеру из конспекта'}
+ else if(a==='termtoggle'){S.termHide=!S.termHide;save();const y=scrollY;render();scrollTo(0,y)}
  else if(a==='mfilter'){const y=scrollY;if(el.dataset.k==='type')matType=el.dataset.v;else matLang=el.dataset.v;render();scrollTo(0,y)}
  else if(a==='newq'){qShift++;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='mreset'){matType='all';matLang='all';matStage='all';matQ='';render()}
@@ -607,12 +613,18 @@ document.addEventListener('click',e=>{
  else if(a==='reset'){if(el.dataset.sure){S=defaults();save();render();toast('Данные стёрты')}else{el.dataset.sure='1';el.textContent='Точно стереть? Нажми ещё раз';setTimeout(()=>{el.dataset.sure='';el.textContent='Стереть всё'},4000)}}
  else if(a==='ttoggle'){const p=$('#tpanel');p.hidden=!p.hidden;if(!p.hidden)p.innerHTML=timerPanel()}
 });
-document.addEventListener('change',e=>{if(e.target.id==='mstage'){matStage=e.target.value;applyMatFilter();return}
+document.addEventListener('change',e=>{if(e.target.id==='termsample'){
+  const sm=termSamples[+e.target.value],ta=$('#codeed'),tm=$('#term');
+  if(e.target.value===''||!sm||!ta||!tm)return;
+  const known=termSamples.some(x=>x.code===ta.value)||ta.value===TERM_TEMPLATE||!ta.value.trim();
+  if(known||confirm('Заменить текущий код выбранным примером?')){ta.value=sm.code;S.code[tm.dataset.id]=sm.code;save();updateGutter();const o=$('#termout');if(o)o.textContent=''}
+  e.target.value='';return}
+ if(e.target.id==='mstage'){matStage=e.target.value;applyMatFilter();return}
  
  if(e.target.id==='ttopic'){S.timer.topic=e.target.value;save()}
  if(e.target.id==='impf'){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>doImport(String(r.result));r.readAsText(f)}
 });
-document.addEventListener('input',e=>{if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
+document.addEventListener('input',e=>{if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
 document.addEventListener('submit',e=>{
  const f=e.target.closest('form');if(!f)return;e.preventDefault();
  const fd=Object.fromEntries(new FormData(f).entries()),k=f.dataset.form;
@@ -834,6 +846,80 @@ function startIcons(){
  iconize(document.body);
  new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>iconize(n)))).observe(document.body,{childList:true,subtree:true});
 }
+
+// ---------- терминал: запуск Go через онлайн-компилятор Wandbox ----------
+const RUN_URL='https://wandbox.org/api/compile.json',RUN_COMPILER='go-1.23.2';
+const TERM_TEMPLATE='package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Привет, Go!")\n}\n';
+let termSamples=[];
+function stripTags(h){return String(h).replace(/<[^>]+>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')}
+// примеры из конспекта: полные программы (package main), кроме многофайловых
+function collectSamples(t){
+ const out=[];let head='Пример';
+ if(!t.d)return out;
+ t.d.b.forEach((b,i)=>{
+  if(b[0]==='h')head=stripTags(b[1]).replace(/^\d+\.\s*/,'');
+  else if(b[0]==='code'&&/^package main\b/m.test(b[1])&&!/"example\.com\//.test(b[1])){
+   const nx=t.d.b[i+1],err=nx&&nx[0]==='out'&&/^\.\/main\.go/.test(nx[1]);
+   out.push({label:(out.length+1)+'. '+head+(err?' (пример ошибки)':''),code:b[1]});
+  }
+ });
+ // одинаковые заголовки различаем номером варианта
+ const seen={};
+ out.forEach(x=>{const k=x.label.replace(/^\d+\.\s*/,'');seen[k]=(seen[k]||0)+1;x.n=seen[k]});
+ out.forEach(x=>{const k=x.label.replace(/^\d+\.\s*/,'');if(seen[k]>1)x.label=x.label+' (вариант '+x.n+')'});
+ return out;
+}
+function starterCode(t){const sm=collectSamples(t);return sm.length?sm[0].code:TERM_TEMPLATE}
+function terminalHtml(t){
+ termSamples=collectSamples(t);
+ const code=S.code[t.id]!=null?S.code[t.id]:starterCode(t);
+ return '<aside class="term" id="term" data-id="'+t.id+'"><div class="term-head"><b>Терминал Go</b><span class="small mute">онлайн, Go 1.23</span><span class="sp"></span><button class="btn sm ghost" data-act="termtoggle" title="Скрыть терминал">Скрыть</button></div>'
+  +'<div class="term-bar"><button class="btn sm pri" data-act="runcode" id="runbtn">▶ Запустить</button><button class="btn sm" data-act="resetcode">Сбросить</button>'
+  +'<select id="termsample" aria-label="Примеры из конспекта"><option value="">Примеры из конспекта</option>'+termSamples.map((x,i)=>'<option value="'+i+'">'+esc(x.label)+'</option>').join('')+'</select></div>'
+  +'<div class="edwrap"><pre class="gut" id="gut" aria-hidden="true"></pre><textarea id="codeed" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Код на Go">'+esc(code)+'</textarea></div>'
+  +'<details class="term-in"><summary>Ввод для программы (stdin)</summary><textarea id="termin" spellcheck="false" placeholder="Каждая строка это одна строка ввода, который прочитает программа"></textarea></details>'
+  +'<div class="term-out"><div class="term-st" id="termstatus">Нажми «Запустить» или Ctrl+Enter</div><pre id="termout"></pre></div>'
+  +'<p class="small mute term-note">При запуске код отправляется на сервер онлайн-компилятора Wandbox. Файлов и сети там нет, время выполнения ограничено.</p></aside>';
+}
+function updateGutter(){
+ const ta=$('#codeed'),g=$('#gut');if(!ta||!g)return;
+ const n=ta.value.split('\n').length;let t='';for(let i=1;i<=n;i++)t+=i+'\n';
+ g.textContent=t;g.scrollTop=ta.scrollTop;
+}
+async function runCode(){
+ const ta=$('#codeed'),btn=$('#runbtn'),out=$('#termout'),st=$('#termstatus');if(!ta||!btn)return;
+ const code=ta.value;if(!code.trim()){st.className='term-st bad';st.textContent='Код пустой';return}
+ btn.disabled=true;st.className='term-st run';st.textContent='Выполняется…';out.textContent='';
+ const t0=performance.now(),ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
+ try{
+  const r=await fetch(RUN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({compiler:RUN_COMPILER,code:code,stdin:($('#termin')||{}).value||'',save:false}),signal:ctl.signal});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const d=await r.json(),ms=Math.round(performance.now()-t0);
+  const fix=x=>String(x||'').replace(/(\.\/)?prog\.go/g,'main.go');
+  const cerr=fix(d.compiler_error||d.compiler_message).trim();
+  const pout=d.program_message?fix(d.program_message):fix((d.program_output||'')+(d.program_error||''));
+  const code0=String(d.status||'0');
+  if(cerr&&!pout){st.className='term-st bad';st.textContent='Ошибка компиляции';out.textContent=cerr}
+  else if(code0!=='0'||d.signal){st.className='term-st bad';st.textContent='Программа завершилась с ошибкой (код '+code0+(d.signal?', '+d.signal:'')+'), '+ms+' мс';out.textContent=pout||cerr}
+  else{st.className='term-st ok';st.textContent='Выполнено за '+ms+' мс';out.textContent=pout||'(программа ничего не вывела)'}
+ }catch(e){
+  st.className='term-st bad';
+  st.textContent=e.name==='AbortError'?'Время ожидания вышло (30 с). Возможно, программа зациклилась.':'Не удалось связаться с онлайн-компилятором. Проверь интернет и попробуй позже.';
+ }finally{clearTimeout(to);btn.disabled=false}
+}
+// ввод: Tab вставляет табуляцию, Enter сохраняет отступ, Ctrl+Enter запускает
+document.addEventListener('keydown',e=>{
+ const ta=e.target;if(!ta||ta.id!=='codeed')return;
+ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();runCode();return}
+ if(e.key==='Tab'){e.preventDefault();ta.setRangeText('\t',ta.selectionStart,ta.selectionEnd,'end');ta.dispatchEvent(new Event('input',{bubbles:true}));return}
+ if(e.key==='Enter'&&!e.shiftKey){
+  e.preventDefault();
+  const pos=ta.selectionStart,before=ta.value.slice(0,pos),line=before.slice(before.lastIndexOf('\n')+1);
+  const indent=(line.match(/^\t*/)||[''])[0]+(/\{\s*$/.test(line)?'\t':'');
+  ta.setRangeText('\n'+indent,pos,ta.selectionEnd,'end');ta.dispatchEvent(new Event('input',{bubbles:true}));
+ }
+});
+document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){const g=$('#gut');if(g)g.scrollTop=e.target.scrollTop}},true);
 
 function init(){
  applyTheme();banner();

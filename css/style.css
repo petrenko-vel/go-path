@@ -353,3 +353,25 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 .adone{display:inline-block;margin-top:4px;font-size:12px;font-weight:700;color:var(--ac)}
 @media (max-width:520px){.achs{grid-template-columns:1fr}}
 .ach.got .medal .ai{color:#fff}.ach:not(.got) .medal .ai{color:var(--mute)}
+/* терминал рядом с темой */
+.wrap.wide{max-width:1560px}
+.tlayout{display:grid;grid-template-columns:minmax(0,1fr) clamp(380px,34vw,540px);gap:18px;align-items:start}
+.tlayout.noterm{grid-template-columns:minmax(0,1fr)}
+.tcol{min-width:0}
+.term{position:sticky;top:64px;max-height:calc(100vh - 80px);display:flex;flex-direction:column;gap:8px;margin-top:8px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;box-shadow:var(--sh);overflow:auto}
+.term-head{display:flex;align-items:center;gap:8px}
+.term-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.term-bar select{width:auto;flex:1;min-width:150px;min-height:32px;padding:4px 8px;font-size:14px}
+.edwrap{display:flex;background:#101518;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.gut{margin:0;padding:12px 8px 12px 10px;background:#0b0f11;color:#5f6e76;font:13.5px/1.55 ui-monospace,Menlo,Consolas,monospace;text-align:right;user-select:none;overflow:hidden;min-width:34px;border-radius:0;height:300px}
+#codeed{flex:1;height:300px;min-height:160px;resize:vertical;border:0;border-radius:0;background:#101518;color:#e6edf0;font:13.5px/1.55 ui-monospace,Menlo,Consolas,monospace;padding:12px;tab-size:4;white-space:pre;overflow:auto;outline:none}
+.edwrap:focus-within{border-color:var(--acc)}
+.term-in summary{font-size:14px;color:var(--mute)}
+.term-in textarea{min-height:60px;margin-top:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px}
+.term-st{font-size:14px;font-weight:600;color:var(--mute)}
+.term-st.run{color:var(--acc)}
+.term-st.ok{color:var(--ok)}
+.term-st.bad{color:var(--bad)}
+#termout{margin:6px 0 0;min-height:48px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.term-note{margin:0}
+@media (max-width:1100px){.tlayout{grid-template-columns:1fr}.term{position:static;max-height:none}}
