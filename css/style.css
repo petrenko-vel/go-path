@@ -422,3 +422,17 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 .toast.act .btn{min-height:28px;color:var(--ink)}
 @media (max-width:600px){.calgrid{grid-template-columns:40px repeat(5,minmax(104px,1fr)) 40px 40px}.wsum{font-size:13px}}
 @media (max-width:520px){.caljump{display:none}.cal-head{gap:6px}.planinfo{font-size:13px;padding:6px 10px}.pi-text{min-width:0}.wsum{gap:4px 12px}}
+/* календарь: шире и выше, без внутренней прокрутки */
+.calwrap{overflow:visible;max-height:none}
+.calgrid{grid-template-columns:54px repeat(7,minmax(0,1fr))}
+.hours div{height:64px}
+.daycol{background-size:100% 64px}
+.dayh{top:57px}
+.daycol.we{cursor:pointer;background-color:color-mix(in srgb,var(--mute) 7%,transparent)}
+.ev{font-size:13px}
+.ev.go.lane{padding-right:22px}
+.bnote{color:var(--mute);font-size:11px}
+.dropghost.warn{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.blkinfo.soft{background:var(--accsoft);border-left:4px solid var(--warn)}
+.moveq{margin:8px 0 2px;gap:4px}
+@media (max-width:900px){.calwrap{overflow-x:auto}.calgrid{grid-template-columns:44px repeat(7,minmax(112px,1fr))}.dayh{top:0}}

@@ -115,14 +115,13 @@ function render(){
  document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage')&&k==='map')a.setAttribute('aria-current','page')});
  const m=$('#main');
  const fn={home:vHome,map:vMap,stage:vStage,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
- const cw=route==='calendar'?m.querySelector('.calwrap'):null;if(cw){calScroll=cw.scrollTop;calScrollX=cw.scrollLeft}
- m.className='wrap'+(route==='topic'?' wide':'');
+ m.className='wrap'+(route==='topic'||route==='calendar'?' wide':'');
  m.innerHTML=fn();
  if(route==='calendar')bindCalendar();
  if(route==='materials')applyMatFilter();
  if(route==='topic')updateGutter();
- if(route!=='calendar')calScroll=null;
  window.scrollTo(0,0);
+ if(route==='calendar'){if(calAuto){calAuto=false;autoScrollCal()}}else calAuto=true;
  renderTimer();
 }
 
@@ -140,7 +139,7 @@ function todayCard(){
  const items=all.filter(x=>x.e>now||(x.kind==='go'&&!x.done));
  const hiddenCount=all.length-items.length;
  return '<div class="card hcard" id="todaycard"><div class="hc-head"><span class="hc-ic">📅</span><h3>Сегодня</h3>'+(goTotal?'<span class="small mute">блоков Go: '+goDone+' из '+goTotal+'</span>':'')+'</div>'
-  +(isWE(t)?'<div class="hempty"><div class="he-ic">🌿</div><b>Выходной</b><div class="small mute">Отдыхай. Занятия по плану только в будни.</div></div>'
+  +(isWE(t)&&!all.length?'<div class="hempty"><div class="he-ic">🌿</div><b>Выходной</b><div class="small mute">Отдыхай. Занятия по плану только в будни.</div></div>'
    :items.length?'<div class="tline">'+items.map(x=>{const nowOn=x.s<=now&&now<x.e,late=x.kind==='go'&&!x.done&&x.e<=now;
      return '<div class="tl '+x.kind+(x.done?' done':'')+(nowOn?' now':'')+(late?' late':'')+'"><div class="tl-time">'+fmtT(x.s)+'<br><span class="small mute">'+fmtT(x.e)+'</span></div><div class="tl-body"><b>'+esc(x.title)+'</b>'
       +'<div class="small mute">'+(nowOn?'<span class="nowbadge">идёт сейчас</span> ':'')+(late?'не отмечен · ':'')+(x.kind==='pair'?'пара · '+esc(x.sub):x.kind==='work'?'учёба вечером':'блок Go')+'</div></div>'
@@ -460,7 +459,7 @@ function vSetup(){
 }
 
 // ---------- календарь ----------
-const HH=56,CAL0=8*60,CAL1=21*60;
+const HH=64;let CAL0=8*60,CAL1=21*60,calAuto=true;
 let calScroll=null,calScrollX=0; // положение прокрутки сетки календаря (null: выставить автоматически)
 const PAIR_NO={'11:10':3,'12:40':4,'14:10':5,'15:40':6,'17:10':7};
 function isMissed(b){const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),t=todayS();return !b.done&&(b.date<t||(b.date===t&&b.start+b.dur<=nm))}
@@ -477,10 +476,10 @@ function undoToast(msg,snapshot){
 function updateBlkInfo(){
  const f=document.querySelector('form[data-form=block]'),el=$('#blkinfo');if(!f||!el)return;
  if(!f.start.value||!f.date.value){el.textContent='';return}
- const start=toMin(f.start.value),dur=Math.max(15,+f.dur.value||50),end=start+dur;
- const msg=f.done.checked?'':conflictMsg(f.date.value,start,end,f.id.value||undefined);
- el.className='blkinfo '+(msg?'bad':'ok');
- el.textContent=fmtT(start)+'–'+fmtT(end)+'. '+(msg||'Время свободно.');
+ const start=toMin(f.start.value),dur=Math.max(15,+f.dur.value||50),end=Math.min(1440,start+dur);
+ const note=f.done.checked?'':conflictNote(f.date.value,start,end,f.id.value||undefined);
+ el.className='blkinfo '+(note?'soft':'ok');
+ el.textContent=fmtT(start)+'–'+fmtT(end)+'. '+(note?'Пересекается с: '+note+'. Это нормально, можно сохранить.':'Время свободно.');
 }
 function updateNowLine(){
  const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),l=document.querySelector('.nowline');
@@ -498,8 +497,26 @@ function weekSummary(days){
  const bs=S.blocks.filter(b=>days.includes(b.date)),dn=bs.filter(b=>b.done).length,mins=bs.reduce((a,b)=>a+b.dur,0);
  return '<div class="wsum"><span><b>'+bs.length+'</b> блоков на неделе</span><span><b>'+dn+'</b> выполнено</span><span>≈ <b>'+Math.round(mins/60*10)/10+'</b> ч занятий</span>'+(bs.length?'<span class="wbar">'+progressBar(dn/bs.length*100)+'</span>':'')+'</div>';
 }
+// видимые часы: 8–21, но шире, если на неделе есть блоки вне этого диапазона
+function calRange(days){
+ let lo=8*60,hi=21*60;
+ S.blocks.forEach(b=>{if(days.includes(b.date)){lo=Math.min(lo,Math.floor(b.start/60)*60);hi=Math.max(hi,Math.ceil((b.start+b.dur)/60)*60)}});
+ CAL0=lo;CAL1=Math.min(hi,24*60);
+}
+// блоки, идущие одновременно, ставим рядом: полосы (lane) внутри дня
+function laneLayout(bs){
+ const arr=bs.slice().sort((a,b)=>a.start-b.start||String(a.id).localeCompare(String(b.id))),res={};let group=[],gEnd=0;
+ const flush=()=>{
+  if(!group.length)return;const lanes=[];
+  group.forEach(b=>{let i=lanes.findIndex(end=>end<=b.start);if(i<0){i=lanes.length;lanes.push(0)}lanes[i]=b.start+b.dur;res[b.id]={lane:i}});
+  group.forEach(b=>{res[b.id].lanes=lanes.length});group=[];
+ };
+ arr.forEach(b=>{if(group.length&&b.start>=gEnd)flush();group.push(b);gEnd=Math.max(gEnd,b.start+b.dur)});flush();
+ return res;
+}
 function weekView(){
  const mon=mondayOf(calDate),days=[...Array(7)].map((_,i)=>addDays(mon,i)),t=todayS();
+ calRange(days);
  const par=parity(mon),H=(CAL1-CAL0)/60*HH,nd=new Date(),nm=nd.getHours()*60+nd.getMinutes();
  let hours='<div class="hours">'+[...Array((CAL1-CAL0)/60)].map((_,i)=>'<div>'+pad(CAL0/60+i)+':00</div>').join('')+'</div>';
  let cols=days.map(d=>{
@@ -510,25 +527,27 @@ function weekView(){
    if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
     ev+=evBox(a,ps[0].s,'travel','дорога · 40 мин');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога · 25 мин');
     ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'–'+fmtT(p.e)+'</b>'+(PAIR_NO[fmtT(p.s)]?' <span class="pno">'+PAIR_NO[fmtT(p.s)]+' пара</span>':'')+'<br>'+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
-   S.blocks.filter(b=>b.date===d).forEach(b=>{
-    const miss=isMissed(b),stt=b.done?'выполнен':miss?'пропущен':'запланирован';
-    const ttl=fmtT(b.start)+'–'+fmtT(b.start+b.dur)+' · '+b.title+' ('+stt+')';
-    const chk=b.done?'Снять отметку о выполнении':'Отметить выполненным';
-    ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':'')+(miss?' missed':''),
-     '<button class="bchk" type="button" data-act="bdone" data-id="'+b.id+'" aria-label="'+chk+'" title="'+chk+'">✓</button><b>'+fmtT(b.start)+'</b> '+esc(b.title),
-     ' data-bid="'+b.id+'" tabindex="0" role="button" title="'+esc(ttl)+'" aria-label="'+esc(ttl)+'"');
-   });
-   if(d===t&&nm>=CAL0&&nm<=CAL1)ev+='<div class="nowline" style="top:'+(nm-CAL0)/60*HH+'px"><i></i></div>';
-  }else ev='<div class="wev">Выходной</div>';
+  }
+  const bs=S.blocks.filter(b=>b.date===d),lay=laneLayout(bs);
+  bs.forEach(b=>{
+   const miss=isMissed(b),stt=b.done?'выполнен':miss?'пропущен':'запланирован';
+   const ttl=fmtT(b.start)+'–'+fmtT(Math.min(1440,b.start+b.dur))+' · '+b.title+' ('+stt+')'+(b.note?'. '+b.note:'');
+   const chk=b.done?'Снять отметку о выполнении':'Отметить выполненным',L=lay[b.id]||{lane:0,lanes:1};
+   const xs=L.lanes>1?'left:calc(3px + (100% - 6px) * '+L.lane+' / '+L.lanes+');right:auto;width:calc((100% - 6px) / '+L.lanes+' - 2px);':'';
+   ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':'')+(miss?' missed':'')+(L.lanes>1?' lane':''),
+    '<button class="bchk" type="button" data-act="bdone" data-id="'+b.id+'" aria-label="'+chk+'" title="'+chk+'">✓</button><b>'+fmtT(b.start)+'</b> '+esc(b.title)+(b.note?' <span class="bnote">✎</span>':''),
+    ' data-bid="'+b.id+'" tabindex="0" role="button" title="'+esc(ttl)+'" aria-label="'+esc(ttl)+'"',xs);
+  });
+  if(d===t&&nm>=CAL0&&nm<=CAL1)ev+='<div class="nowline" style="top:'+(nm-CAL0)/60*HH+'px"><i></i></div>';
   return '<div class="daycol'+(we?' we':'')+(d===t?' today':'')+(d<t?' past':'')+'" data-date="'+d+'" style="height:'+H+'px">'+ev+'</div>';
  });
  const heads='<div class="dayh"></div>'+days.map(d=>'<div class="dayh'+(d===t?' today':'')+(isWE(d)?' we':'')+'">'+DOW[dow(d)-1]+' '+parse(d).getDate()+'</div>').join('');
  return '<p id="calsub" hidden data-ttl="'+fmtD(days[0])+' – '+fmtD(days[6])+' · '+(par==='Ч'?'числитель':'знаменатель')+'"></p>'+weekSummary(days)+'<div class="calwrap"><div class="calgrid">'+heads+hours+cols.join('')+'</div></div>';
 }
-function evBox(a,b,cls,html,attrs){
+function evBox(a,b,cls,html,attrs,xs){
  if(b<=CAL0||a>=CAL1)return '';
- const top=(Math.max(a,CAL0)-CAL0)/60*HH,h=Math.max(18,(Math.min(b,CAL1)-Math.max(a,CAL0))/60*HH-2);
- return '<div class="ev '+cls+'" style="top:'+top+'px;height:'+h+'px"'+(attrs||'')+'>'+html+'</div>';
+ const top=(Math.max(a,CAL0)-CAL0)/60*HH,h=Math.max(20,(Math.min(b,CAL1)-Math.max(a,CAL0))/60*HH-2);
+ return '<div class="ev '+cls+'" style="top:'+top+'px;height:'+h+'px;'+(xs||'')+'"'+(attrs||'')+'>'+html+'</div>';
 }
 function monthView(){
  const d=parse(monthDate),y=d.getFullYear(),m=d.getMonth();
@@ -544,11 +563,8 @@ function bindCalendar(){
  document.querySelectorAll('.daycol').forEach(col=>{
   col.addEventListener('click',e=>{
    if(e.target.closest('.ev.go'))return;
-   if(col.classList.contains('we')){toast('Выходной. Блоки на выходные не ставим.');return}
    const y=e.clientY-col.getBoundingClientRect().top;
-   const mins=Math.max(CAL0,Math.min(CAL1-50,CAL0+Math.round(y/HH*60/15)*15));
-   const why=busyReason(col.dataset.date,mins,mins+15);
-   if(why){toast('Здесь занято: '+why+'. Выбери свободное время.');return}
+   const mins=Math.max(CAL0,Math.min(Math.min(CAL1,24*60)-50,CAL0+Math.round(y/HH*60/15)*15));
    openBlock(null,{date:col.dataset.date,start:mins});
   });
  });
@@ -558,15 +574,14 @@ function bindCalendar(){
   n.addEventListener('click',e=>{if(e.target.closest('.bchk'))return;if(touchTap===n.dataset.bid){touchTap=null;openBlock(n.dataset.bid)}});
   n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openBlock(n.dataset.bid)}});
  });
- const w=$('.calwrap');
- if(w){
-  if(calScroll===null){
-   const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),tc=w.querySelector('.daycol.today');
-   const focus=tc?Math.max(nm,16*60):16*60; // вечер важнее: там учёба
-   w.scrollTop=Math.max(0,(focus-CAL0)/60*HH-60);
-   if(tc&&w.scrollWidth>w.clientWidth)w.scrollLeft=Math.max(0,tc.offsetLeft-50);
-  }else{w.scrollTop=calScroll;w.scrollLeft=calScrollX}
- }
+}
+// при первом открытии страницы календаря показываем вечер: там учёба
+function autoScrollCal(){
+ const w=$('.calwrap');if(!w||calMode!=='week')return;
+ const tc=w.querySelector('.daycol.today'),nd=new Date(),nm=nd.getHours()*60+nd.getMinutes();
+ const focus=tc?Math.max(nm,16*60):16*60;
+ window.scrollTo(0,Math.max(0,w.getBoundingClientRect().top+scrollY+(focus-CAL0)/60*HH-150));
+ if(tc&&w.scrollWidth>w.clientWidth)w.scrollLeft=Math.max(0,tc.offsetLeft-50);
 }
 const WORK_START=9*60,WORK_END=12*60; // по утрам в будни работа, учёба вечером
 function workOn(d){
@@ -601,6 +616,14 @@ function conflictMsg(date,s,e,ignoreId){
  const g=goConflict(date,s,e,ignoreId);if(g)return 'Пересекается с '+g+'. Выбери другое время.';
  return '';
 }
+// чему мешает время (только для подсказки, сохранять можно в любом случае)
+function conflictNote(date,s,e,ignoreId){
+ const parts=[],r=busyReason(date,s,e);
+ if(r&&r!=='выходной')parts.push(r);
+ const c=S.blocks.find(b=>b.id!==ignoreId&&b.date===date&&s<b.start+b.dur&&e>b.start);
+ if(c)parts.push('блок «'+c.title+'»');
+ return parts.join(', ');
+}
 // ближайшее свободное вечернее окно для нового блока
 function suggestSlot(){
  const nowD=new Date(),nm=nowD.getHours()*60+nowD.getMinutes(),today=todayS();
@@ -631,8 +654,6 @@ function planInfo(){
   +'<div class="pi-act">'+(missed?'<button class="btn sm pri" data-act="movemissed">Перенести пропущенные</button>':'')+'<button class="btn sm ghost" data-act="rebuildplan">Перестроить план</button></div></div>';
 }
 function tryPlace(b,date,start){
- const msg=conflictMsg(date,start,start+b.dur,b.id);
- if(msg){toast(msg);return false}
  b.date=date;b.start=start;b.manual=true;save();rebuildPlan();return true;
 }
 function startDrag(e,node){
@@ -644,7 +665,7 @@ function startDrag(e,node){
   const col=[...document.querySelectorAll('.daycol')].find(c=>{const r=c.getBoundingClientRect();return ev.clientX>=r.left&&ev.clientX<r.right});
   if(!col)return null;
   let mins=CAL0+Math.round(((r0.top+(ev.clientY-sy)-col.getBoundingClientRect().top)/HH*60)/15)*15;
-  mins=Math.max(CAL0,Math.min(CAL1-b.dur,mins));
+  mins=Math.max(CAL0,Math.min(Math.min(CAL1,24*60)-b.dur,mins));
   return {col,mins};
  };
  const clearGhost=()=>{if(ghost){ghost.remove();ghost=null}};
@@ -653,10 +674,10 @@ function startDrag(e,node){
   if(!moved&&Math.abs(dx)+Math.abs(dy)<6)return;
   moved=true;node.classList.add('drag');node.style.transform='translate('+dx+'px,'+dy+'px)';
   clearGhost();const t=target(ev);if(!t)return;
-  const msg=conflictMsg(t.col.dataset.date,t.mins,t.mins+b.dur,b.id);
-  ghost=document.createElement('div');ghost.className='dropghost'+(msg?' bad':'');
+  const msg=conflictNote(t.col.dataset.date,t.mins,t.mins+b.dur,b.id);
+  ghost=document.createElement('div');ghost.className='dropghost'+(msg?' warn':'');
   ghost.style.top=(t.mins-CAL0)/60*HH+'px';ghost.style.height=(b.dur/60*HH-2)+'px';
-  ghost.innerHTML='<b>'+fmtT(t.mins)+'–'+fmtT(t.mins+b.dur)+'</b>'+(msg?'<br><small>'+esc(msg.replace(' Выбери другое время.',''))+'</small>':'');
+  ghost.innerHTML='<b>'+fmtT(t.mins)+'–'+fmtT(t.mins+b.dur)+'</b>'+(msg?'<br><small>пересекается: '+esc(msg)+'</small>':'');
   t.col.appendChild(ghost);
  };
  const up=ev=>{
@@ -677,7 +698,7 @@ function openBlock(id,pre){
  const slot=suggestSlot();
  const v=b||Object.assign({title:nt?'Go: '+nt.title:'Go',topic:nt?nt.id:'',date:slot.date,start:slot.start,dur:50,done:false},pre||{});
  const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
- m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Блок':'Новый блок')+'</h3><label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select><div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required min="08:00" max="20:45" step="300" value="'+fmtT(v.start)+'"></div></div><label>Длительность, мин</label><input type="number" name="dur" min="15" max="180" step="5" value="'+v.dur+'"><div class="row durq">'+[30,45,50,60,90].map(n=>'<button class="btn sm" type="button" data-act="setdur" data-v="'+n+'">'+n+'</button>').join('')+'</div><div class="blkinfo" id="blkinfo"></div><label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнен</label><input type="hidden" name="id" value="'+(b?b.id:'')+'"><p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
+ m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Блок':'Новый блок')+'</h3><label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select><div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required step="300" value="'+fmtT(v.start)+'"></div></div><div class="row moveq"><span class="small mute">Перенести:</span>'+[['today','Сегодня'],['tomorrow','Завтра'],['d1','+1 день'],['w1','+1 неделя'],['am','Утро'],['day','День'],['eve','Вечер']].map(x=>'<button class="btn sm" type="button" data-act="mvq" data-k="'+x[0]+'">'+x[1]+'</button>').join('')+'</div><label>Длительность, мин</label><input type="number" name="dur" min="15" max="180" step="5" value="'+v.dur+'"><div class="row durq">'+[30,45,50,60,90].map(n=>'<button class="btn sm" type="button" data-act="setdur" data-v="'+n+'">'+n+'</button>').join('')+'</div><div class="blkinfo" id="blkinfo"></div><label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнен</label><label>Заметка</label><textarea name="note" rows="2" placeholder="Что сделать, ссылка, вопрос">'+esc(v.note||'')+'</textarea><input type="hidden" name="id" value="'+(b?b.id:'')+'"><p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn" type="button" data-act="dupblock" data-id="'+b.id+'">Копия на завтра</button><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
  document.body.appendChild(m);updateBlkInfo();const f=m.querySelector('input[name=title]');f&&f.focus();
 }
 
@@ -724,6 +745,12 @@ document.addEventListener('click',e=>{
  else if(a==='runcode'){runCode()}
  else if(a==='resetcode'){const id=$('#term').dataset.id;delete S.code[id];save();const ta=$('#codeed');ta.value=starterCode(TBY[id]);updateGutter();$('#termout').textContent='';const st=$('#termstatus');st.className='term-st';st.textContent='Код сброшен к примеру из конспекта'}
  else if(a==='termtoggle'){S.termHide=!S.termHide;save();const y=scrollY;render();scrollTo(0,y)}
+ else if(a==='mvq'){const f=document.querySelector('form[data-form=block]');if(f){
+  const k=el.dataset.k,add=n=>{f.date.value=addDays(f.date.value||todayS(),n)};
+  if(k==='today')f.date.value=todayS();else if(k==='tomorrow')f.date.value=addDays(todayS(),1);else if(k==='d1')add(1);else if(k==='w1')add(7);
+  else if(k==='am')f.start.value='09:00';else if(k==='day')f.start.value='14:00';else if(k==='eve')f.start.value='18:00';
+  updateBlkInfo()}}
+ else if(a==='dupblock'){const b=S.blocks.find(x=>x.id===id);if(b){const sn=snap();S.blocks.push(Object.assign({},b,{id:uid(),date:addDays(b.date,1),done:false,manual:true}));save();const m=$('.modal');m&&m.remove();rerender();undoToast('Копия создана на '+fmtD(addDays(b.date,1)),sn)}}
  else if(a==='setdur'){const f=document.querySelector('form[data-form=block]');if(f){f.dur.value=el.dataset.v;updateBlkInfo()}}
  else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!isMissed(x));rebuildPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
  else if(a==='mfilter'){const y=scrollY;if(el.dataset.k==='type')matType=el.dataset.v;else matLang=el.dataset.v;render();scrollTo(0,y)}
@@ -743,14 +770,14 @@ document.addEventListener('click',e=>{
  else if(a==='delblock'){const sn=snap();S.blocks=S.blocks.filter(x=>x.id!==id);save();const m=$('.modal');m&&m.remove();rerender();undoToast('Блок удалён',sn)}
  else if(a==='newblock'){openBlock(null,{})}
  else if(a==='rebuildplan'){if(confirm('Построить план заново по оставшимся темам? Блоки, которые ты добавила или двигала сама, и выполненные останутся на месте, остальные будущие блоки заменятся.')){const sn=snap(),r=rebuildPlan();rerender();undoToast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до конца года: '+r.left:''),sn)}}
- else if(a==='calprev'||a==='calnext'){const k=a==='calnext'?1:-1;if(calMode==='week')calDate=addDays(calDate,7*k);else{const d=parse(monthDate);d.setMonth(d.getMonth()+k,1);monthDate=iso(d)}render()}
- else if(a==='caltoday'){calDate=todayS();monthDate=todayS();render()}
+ else if(a==='calprev'||a==='calnext'){const k=a==='calnext'?1:-1;if(calMode==='week')calDate=addDays(calDate,7*k);else{const d=parse(monthDate);d.setMonth(d.getMonth()+k,1);monthDate=iso(d)}rerender()}
+ else if(a==='caltoday'){calDate=todayS();monthDate=todayS();rerender()}
  else if(a==='calmode'){
   const to=el.dataset.v;
   if(to==='month'&&calMode!=='month')monthDate=calDate;
   if(to==='week'&&calMode==='month'){const md=parse(monthDate),td=parse(todayS());calDate=(md.getFullYear()===td.getFullYear()&&md.getMonth()===td.getMonth())?todayS():iso(new Date(md.getFullYear(),md.getMonth(),1))}
-  calMode=to;render()}
- else if(a==='gotoweek'){calDate=el.dataset.date;calMode='week';render()}
+  calMode=to;calAuto=true;render()}
+ else if(a==='gotoweek'){calDate=el.dataset.date;calMode='week';calAuto=true;render()}
  else if(a==='theme'){S.theme=el.dataset.v;save();applyTheme();render()}
  else if(a==='export'){$('#exp').value=JSON.stringify(S,null,1)}
  else if(a==='copy'){const t=$('#exp');if(!t.value)t.value=JSON.stringify(S,null,1);t.select();try{navigator.clipboard.writeText(t.value).then(()=>toast('Скопировано'),()=>toast('Выдели текст и скопируй вручную'))}catch(_){toast('Выдели текст и скопируй вручную')}}
@@ -759,7 +786,7 @@ document.addEventListener('click',e=>{
  else if(a==='ttoggle'){const p=$('#tpanel');p.hidden=!p.hidden;if(!p.hidden)p.innerHTML=timerPanel()}
 });
 document.addEventListener('change',e=>{
- if(e.target.id==='caljump'){const v=e.target.value;if(v){calDate=v;monthDate=v;render()}return}
+ if(e.target.id==='caljump'){const v=e.target.value;if(v){calDate=v;monthDate=v;rerender()}return}
  if(e.target.name==='topic'&&e.target.closest&&e.target.closest('form[data-form=block]')){const f=e.target.form,tp=TBY[e.target.value];if(tp&&(!f.title.value||/^Go(:|$)/.test(f.title.value)))f.title.value='Go: '+tp.title;updateBlkInfo();return}
  if(e.target.id==='termsample'){
   const sm=termSamples[+e.target.value],ta=$('#codeed'),tm=$('#term');
@@ -783,9 +810,8 @@ document.addEventListener('submit',e=>{
   const dur=Math.max(15,+fd.dur||50),start=toMin(fd.start);
   let b=fd.id?S.blocks.find(x=>x.id===fd.id):null;
   const tmp={dur,date:b?b.date:fd.date,start:b?b.start:start};
-  if(!fd.done){const msg=conflictMsg(fd.date,start,start+dur,fd.id);if(msg){toast(msg);return}}
   if(!b){b={id:uid()};S.blocks.push(b)}
-  Object.assign(b,{title:fd.title,topic:fd.topic||'',date:fd.date,start,dur,done:!!fd.done,manual:true});
+  Object.assign(b,{title:fd.title,topic:fd.topic||'',date:fd.date,start,dur:Math.min(dur,1440-start),done:!!fd.done,manual:true,note:(fd.note||'').trim()});
   save();if(!fd.done)rebuildPlan();const m=$('.modal');m&&m.remove();rerender()}
 });
 let downOnOverlay=false;
