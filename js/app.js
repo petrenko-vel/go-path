@@ -174,6 +174,7 @@ function parseHash(){
  const h=(location.hash||'#home').slice(1);
  if(h.startsWith('t-')){route='topic';param=h.slice(2)}
  else if(h.startsWith('st-')){route='stage';param=h.slice(3)}
+ else if(h.startsWith('quick=')){route='calendar';param='';try{quickPre=decodeURIComponent(h.slice(6))}catch(_){quickPre=''}}
  else{route=['home','map','calendar','tasks','materials','stats','setup'].includes(h)?h:'home';param=''}
 }
 function rerender(){const y=scrollY;render();scrollTo(0,y)}
@@ -189,6 +190,7 @@ function render(){
  if(route==='topic')updateGutter();
  window.scrollTo(0,0);
  if(route==='calendar'){if(calAuto){calAuto=false;autoScrollCal()}}else calAuto=true;
+ if(route==='calendar'&&quickPre!==null){const tx=quickPre;quickPre=null;history.replaceState(null,'','#calendar');openQuick(tx)}
  renderTimer();
 }
 
@@ -527,6 +529,7 @@ function vSetup(){
 
 // ---------- календарь ----------
 const HH=64;let CAL0=8*60,CAL1=21*60,calAuto=true;
+let quickPre=null; // текст для окна быстрого добавления, пришедший из ссылки
 let calScroll=null,calScrollX=0; // положение прокрутки сетки календаря (null: выставить автоматически)
 const PAIR_NO={'11:10':3,'12:40':4,'14:10':5,'15:40':6,'17:10':7};
 function isMissed(b){const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),t=todayS();return !b.done&&(b.date<t||(b.date===t&&b.start+b.dur<=nm))}
@@ -556,7 +559,7 @@ function vCalendar(){
  const jump=calMode==='week'?calDate:monthDate;
  const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b>'
   +'<input type="date" id="caljump" class="caljump" aria-label="Перейти к дате" value="'+jump+'">'
-  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm pri" data-act="newblock">+ Дело</button></div>';
+  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm" data-act="quickadd">Быстро добавить</button><button class="btn sm pri" data-act="newblock">+ Дело</button></div>';
  const leg='<p class="small mute legend"><span class="chip" style="background:var(--pair)">пара</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span><span class="chip">блок Go</span><span class="chip" style="background:color-mix(in srgb,#c98a1b 22%,var(--card))">другое дело</span><span class="chip ok">выполнен</span><span class="chip warn">пропущен</span> Тяни блок, чтобы перенести. Галочка в углу отмечает выполненным. Нажми на пару или работу, чтобы изменить или перенести. Нажми на пустое время, чтобы добавить дело.</p>';
  return '<h1>Календарь</h1>'+head+planInfo()+(calMode==='week'?weekView():monthView())+leg;
 }
@@ -852,6 +855,7 @@ document.addEventListener('click',e=>{
   const blob=new Blob([JSON.stringify(S,null,1)],{type:'application/json'}),u=URL.createObjectURL(blob),l=document.createElement('a');
   l.href=u;l.download='go-path-backup-'+todayS()+'.json';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);
   S.lastBackup=todayS();save();toast('Копия сохранена в папку загрузок');render()}
+ else if(a==='quickadd'){openQuick('')}
  else if(a==='runcode'){runCode()}
  else if(a==='resetcode'){const id=$('#term').dataset.id;delete S.code[id];save();const ta=$('#codeed');ta.value=starterCode(TBY[id]);updateGutter();$('#termout').textContent='';const st=$('#termstatus');st.className='term-st';st.textContent='Код сброшен к примеру из конспекта'}
  else if(a==='termtoggle'){S.termHide=!S.termHide;save();const y=scrollY;render();scrollTo(0,y)}
@@ -917,7 +921,7 @@ document.addEventListener('change',e=>{
  if(e.target.id==='ttopic'){S.timer.topic=e.target.value;save()}
  if(e.target.id==='impf'){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>doImport(String(r.result));r.readAsText(f)}
 });
-document.addEventListener('input',e=>{if(e.target.closest&&e.target.closest('form[data-form=block]'))updateBlkInfo();if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
+document.addEventListener('input',e=>{if(e.target.id==='quicktxt'){updateQuick();return}if(e.target.closest&&e.target.closest('form[data-form=block]'))updateBlkInfo();if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
 document.addEventListener('submit',e=>{
  const f=e.target.closest('form');if(!f)return;e.preventDefault();
  const fd=Object.fromEntries(new FormData(f).entries()),k=f.dataset.form;
@@ -956,6 +960,10 @@ document.addEventListener('submit',e=>{
    else S.workOv[d]={s:s0,e:e0};
   }
   save();const m=$('.modal');m&&m.remove();rerender();undoToast('Работа сохранена',sn)}
+ else if(k==='quick'){
+  const r=applyQuick(fd.text);if(!r){toast('Ничего не распознано. Пример: завтра 9:30-10:30 Задача');return}
+  const m=$('.modal');m&&m.remove();calAuto=true;render();
+  undoToast('Добавлено дел: '+r.n+(r.pairs?', правок пар: '+r.pairs:''),r.sn)}
 });
 let downOnOverlay=false;
 document.addEventListener('mousedown',e=>{downOnOverlay=e.target.classList.contains('modal')});
@@ -1266,6 +1274,87 @@ document.addEventListener('keydown',e=>{
 });
 document.addEventListener('scroll',e=>{const c=e.target;if(c&&c.classList&&c.classList.contains('calwrap')){calScroll=c.scrollTop;calScrollX=c.scrollLeft}},true);
 document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){const g=$('#gut');if(g)g.scrollTop=e.target.scrollTop}},true);
+
+// ---------- быстрое добавление дел текстом ----------
+const QWD={'пн':1,'пон':1,'понедельник':1,'вт':2,'вторник':2,'ср':3,'среда':3,'среду':3,'чт':4,'четверг':4,'пт':5,'пятница':5,'пятницу':5,'сб':6,'суббота':6,'субботу':6,'вс':7,'воскресенье':7};
+const Q_DATE_RE=/^(сегодня|послезавтра|завтра|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{2,4})?|(?:в\s+)?(?:понедельник|вторник|среду|среда|четверг|пятницу|пятница|субботу|суббота|воскресенье|пн|вт|ср|чт|пт|сб|вс))(?=[\s,:;]|$)\s*[,:;]?\s*/i;
+function qDate(tok){
+ tok=tok.toLowerCase().replace(/^в\s+/,'').trim();const t=todayS();
+ if(tok==='сегодня')return t;if(tok==='завтра')return addDays(t,1);if(tok==='послезавтра')return addDays(t,2);
+ if(/^\d{4}-\d{2}-\d{2}$/.test(tok))return tok;
+ let m=tok.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?$/);
+ if(m){const td=parse(t);let y=m[3]?+m[3]:td.getFullYear();if(y<100)y+=2000;const d=new Date(y,+m[2]-1,+m[1]);if(!m[3]&&iso(d)<t)d.setFullYear(y+1);return iso(d)}
+ if(QWD[tok]){let d=addDays(t,1);for(let i=0;i<7;i++){if(dow(d)===QWD[tok])return d;d=addDays(d,1)}}
+ return null;
+}
+const qHour=h=>(h<8?h+12:h); // «к 3» значит 15:00
+const qCat=t=>/созвон|встреч|звонок|собеседован|работ|задач/i.test(t)?'work':/пар[аыу]\b|учёб|учеб|лекц|экзамен|зачёт/i.test(t)?'study':'other';
+// разбирает текст: по строке на дело. Возвращает дела, правки пар и замечания
+function parseQuick(text){
+ const out={items:[],pairs:[],warns:[]};let cur=addDays(todayS(),1);
+ String(text||'').split('\n').forEach(raw=>{
+  let line=raw.trim().replace(/^[-•*]\s*/,'').replace(/^\d+[.)]\s+/,'');if(!line)return;
+  let date=cur;const dm=line.match(Q_DATE_RE);
+  if(dm){const d=qDate(dm[1]);if(d){date=d;cur=d;line=line.slice(dm[0].length).trim()}}
+  if(!line)return; // строка была только датой
+  const low=line.toLowerCase();
+  const pm=low.match(/пар[уыа]?\s.*иду\s+только\s+к\s+(\d{1,2})(?::(\d{2}))?/)||low.match(/иду\s+на\s+пар[уы]\s+только\s+к\s+(\d{1,2})(?::(\d{2}))?/);
+  if(pm){out.pairs.push({date,from:qHour(+pm[1])*60+(pm[2]?+pm[2]:0)});return}
+  if(/пары?\s+(?:не\s+иду|отменя\w+|отменены|нет)/.test(low)){out.pairs.push({date,from:24*60});return}
+  let start=null,end=null,dur=null,rest=line;
+  let m=rest.match(/(?:с\s*)?(\d{1,2}):(\d{2})\s*(?:-|–|—|до)\s*(\d{1,2})(?::(\d{2}))?/);
+  if(m){start=+m[1]*60+ +m[2];end=+m[3]*60+(m[4]?+m[4]:0);rest=rest.replace(m[0],' ')}
+  else if((m=rest.match(/(?:в\s*|к\s*)?(\d{1,2}):(\d{2})/))){start=+m[1]*60+ +m[2];rest=rest.replace(m[0],' ')}
+  else if((m=rest.match(/\bв\s+(\d{1,2})(?![\d:])/))){start=qHour(+m[1])*60;rest=rest.replace(m[0],' ')}
+  const dm2=rest.match(/\(?\s*(?:на\s+)?(\d+(?:[.,]\d+)?)\s*(минут|мин|часа|часов|час|ч)\b\s*\)?/i);
+  if(dm2){const v=parseFloat(dm2[1].replace(',','.'));dur=/мин/i.test(dm2[2])?Math.round(v):Math.round(v*60);rest=rest.replace(dm2[0],' ')}
+  const title=rest.replace(/^[\s,:;–—-]+|[\s,:;–—-]+$/g,'').replace(/\s{2,}/g,' ');
+  if(start==null){out.warns.push('Нет времени: «'+raw.trim()+'»');return}
+  if(!title){out.warns.push('Нет названия: «'+raw.trim()+'»');return}
+  if(end!=null&&end<=start)end+=12*60;
+  const d=dur||(end!=null?end-start:60);
+  out.items.push({date,start,dur:Math.max(15,Math.min(d,1440-start)),title:title.charAt(0).toUpperCase()+title.slice(1),cat:qCat(title)});
+ });
+ return out;
+}
+function quickPreview(text){
+ const r=parseQuick(text);let h='';
+ r.items.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.start-b.start).forEach(x=>{h+='<div class="qrow"><b>'+DOW[dow(x.date)-1]+' '+fmtD(x.date)+'</b> '+fmtT(x.start)+'–'+fmtT(x.start+x.dur)+' · '+esc(x.title)+'</div>'});
+ r.pairs.forEach(x=>{
+  const ps=pairsOn(x.date),off=ps.filter(p=>p.e<=x.from),cut=ps.filter(p=>p.s<x.from&&p.e>x.from);
+  h+='<div class="qrow"><b>'+DOW[dow(x.date)-1]+' '+fmtD(x.date)+'</b> пары: '+(x.from>=1440?'не иду':'иду только к '+fmtT(x.from))
+   +(off.length?'. Уберу: '+off.map(p=>fmtT(p.s)+' '+esc(p.name)).join(', '):'')+(cut.length?'. Сдвину начало на '+fmtT(x.from)+': '+cut.map(p=>esc(p.name)).join(', '):'')+'</div>';
+ });
+ r.warns.forEach(w=>{h+='<div class="qrow warn">'+esc(w)+'</div>'});
+ return {html:h||'<div class="small mute">Пока ничего не распознано.</div>',n:r.items.length+r.pairs.length,warns:r.warns.length};
+}
+function openQuick(text){
+ const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
+ const ph='завтра:\n9:30-10:30 Задача по HH\n11:00 Созвон (30 мин)\nс 13:00 до 14:00 Встреча\nна пару иду только к 3';
+ m.innerHTML='<form class="box wide" data-form="quick"><h3>Быстро добавить дела</h3><p class="small mute">По строке на дело: дата (сегодня, завтра, пт, 20.11), время или промежуток, название, при желании длительность в скобках. Строка вида «завтра:» задаёт дату для следующих строк. «На пару иду только к 3» уберёт ранние пары.</p>'
+  +'<textarea id="quicktxt" name="text" rows="9" placeholder="'+esc(ph)+'">'+esc(text||'')+'</textarea><div class="qprev" id="qprev"></div>'
+  +'<p class="row"><button class="btn pri" type="submit" id="qgo">Добавить в календарь</button><button class="btn" type="button" data-act="closemodal">Отмена</button></p></form>';
+ document.body.appendChild(m);updateQuick();const f=m.querySelector('textarea');f&&f.focus();
+}
+function updateQuick(){
+ const ta=$('#quicktxt'),pv=$('#qprev'),go=$('#qgo');if(!ta||!pv)return;
+ const r=quickPreview(ta.value);pv.innerHTML=r.html;if(go)go.disabled=!r.n;
+}
+function applyQuick(text){
+ const r=parseQuick(text);if(!r.items.length&&!r.pairs.length)return null;
+ const sn=snap();
+ r.items.forEach(x=>S.blocks.push({id:uid(),kind:'other',cat:x.cat,title:x.title,topic:'',date:x.date,start:x.start,dur:x.dur,done:false,manual:true,note:''}));
+ r.pairs.forEach(x=>{ // пары до указанного времени убираем, пересекающую начинаем позже
+  pairsOn(x.date).forEach(p=>{
+   if(p.e<=x.from)S.pairOv[p.id]=Object.assign({},S.pairOv[p.id]||{},{off:true});
+   else if(p.s<x.from)S.pairOv[p.id]=Object.assign({},S.pairOv[p.id]||{},{s:x.from});
+  });
+ });
+ save();
+ const first=r.items.concat(r.pairs).map(x=>x.date).sort()[0];
+ if(first){calDate=first;monthDate=first;calMode='week'}
+ return {sn,n:r.items.length,pairs:r.pairs.length};
+}
 
 function init(){
  applyTheme();banner();
