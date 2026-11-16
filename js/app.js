@@ -654,9 +654,10 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 
 // ---------- старт ----------
 // ---------- план занятий (окна из Google-таблицы «Параметры/Расписание пар») ----------
-const GO_WIN={ // окна для Go по дню недели; у знаменателя и числителя отличается только среда
- 'Ч':{1:['09:30-12:30'],2:['09:30-12:00'],3:['09:30-10:30','17:25-19:25'],4:['09:30-12:00'],5:['09:30-12:30']},
- 'З':{1:['09:30-12:30'],2:['09:30-12:00'],3:['09:30-12:00'],4:['09:30-12:00'],5:['09:30-12:30']}};
+const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
+ 'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
+ 'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
+const PLAN_VERSION=2; // при смене окон повышаем: план перестроится сам при следующем открытии
 const PLAN_END='2026-12-31', PLAN_SKIP=['2026-12-31']; // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
 function planSlots(date){
@@ -668,23 +669,24 @@ function planSlots(date){
  });
  return out;
 }
-// Ставит блоки по оставшимся темам на каждый будний день, начиная с завтра. Будущие невыполненные блоки заменяются.
+// Ставит блоки по оставшимся темам на каждый будний день, начиная с сегодняшнего вечера. Будущие невыполненные блоки заменяются.
 function rebuildPlan(){
- const from=addDays(todayS(),1);
- S.blocks=S.blocks.filter(b=>b.done||b.date<from);
+ const from=todayS(),nowD=new Date(),nowMin=nowD.getHours()*60+nowD.getMinutes();
+ S.blocks=S.blocks.filter(b=>b.done||b.date<from||(b.date===from&&b.start<=nowMin));
  const queue=[];
  TOPICS.forEach(t=>{const st=topicStatus(t.id);if(st==='done')return;
   for(let i=1;i<=t.blocks;i++)queue.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')})});
  let d=from,placed=0;
  while(d<=PLAN_END&&queue.length){
   for(const st of planSlots(d)){
+   if(d===from&&st<=nowMin)continue;
    if(!queue.length)break;
    const q=queue.shift();
    S.blocks.push({id:uid(),title:q.title,topic:q.topic,date:d,start:st,dur:BLOCK_MIN,done:false});placed++;
   }
   d=addDays(d,1);
  }
- S.planV=1;save();
+ S.planV=PLAN_VERSION;save();
  return {placed,left:queue.length};
 }
 
@@ -924,7 +926,7 @@ document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){cons
 function init(){
  applyTheme();banner();
  startIcons();
- if(!S.planV)rebuildPlan();
+ if((S.planV||0)<PLAN_VERSION)rebuildPlan();
  startVisit();setInterval(beat,5000);
  setInterval(()=>{if(route==='home'){const c=document.getElementById('todaycard');if(c)c.outerHTML=todayCard()}},30000);
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});
