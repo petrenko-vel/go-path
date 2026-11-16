@@ -119,13 +119,13 @@ function syncBlocksFromStatus(id,st,prev){
   const n=S.blocks.length;
   S.blocks=S.blocks.filter(b=>!(isGo(b)&&b.topic===id&&!b.done&&b.date>today&&!b.manual));
   if(S.blocks.length!==n)changed=true;
-  if(changed)rebuildPlan(); // освободившиеся вечера займут следующие темы
+  if(changed)fillPlan(); // ничего не двигаем: освободившиеся места остаются свободными
  }else if(prev==='done'&&st!=='done'){ // тема снова не освоена: её блоки возвращаются в план
   if(st==='new')S.blocks.forEach(b=>{if(isGo(b)&&b.topic===id&&b.done)b.done=false});
-  rebuildPlan();changed=true;
+  fillPlan();changed=true;
  }else if(st==='new'&&prev!=='new'){
   S.blocks.forEach(b=>{if(isGo(b)&&b.topic===id&&b.done){b.done=false;changed=true}});
-  if(changed)rebuildPlan();
+  if(changed)fillPlan();
  }
  if(changed)save();
 }
@@ -865,7 +865,7 @@ document.addEventListener('click',e=>{
   updateBlkInfo()}}
  else if(a==='dupblock'){const b=S.blocks.find(x=>x.id===id);if(b){const sn=snap();S.blocks.push(Object.assign({},b,{id:uid(),date:addDays(b.date,1),done:false,manual:true}));save();const m=$('.modal');m&&m.remove();rerender();undoToast('Копия создана на '+fmtD(addDays(b.date,1)),sn)}}
  else if(a==='setdur'){const f=document.querySelector('form[data-form=block]');if(f){f.dur.value=el.dataset.v;updateBlkInfo()}}
- else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!(isGo(x)&&isMissed(x)));rebuildPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
+ else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!(isGo(x)&&isMissed(x)));fillPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
  else if(a==='mfilter'){const y=scrollY;if(el.dataset.k==='type')matType=el.dataset.v;else matLang=el.dataset.v;render();scrollTo(0,y)}
  else if(a==='newq'){qShift++;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='mreset'){matType='all';matLang='all';matStage='all';matQ='';render()}
@@ -882,7 +882,7 @@ document.addEventListener('click',e=>{
  else if(a==='closemodal'){const m=$('.modal');m&&m.remove()}
  else if(a==='delblock'){const sn=snap(),old=S.blocks.find(x=>x.id===id);S.blocks=S.blocks.filter(x=>x.id!==id);save();if(old&&isGo(old)&&old.topic&&old.done)afterBlockDone(old.topic,false);const m=$('.modal');m&&m.remove();rerender();undoToast('Дело удалено',sn)}
  else if(a==='newblock'){openBlock(null,{})}
- else if(a==='rebuildplan'){if(confirm('Построить план заново по оставшимся темам? Блоки, которые ты добавила или двигала сама, и выполненные останутся на месте, остальные будущие блоки заменятся.')){const sn=snap(),r=rebuildPlan();rerender();undoToast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до конца года: '+r.left:''),sn)}}
+ else if(a==='rebuildplan'){if(confirm('Построить план заново по оставшимся темам? Всё, что стоит на сегодня и раньше, блоки, которые ты добавила или двигала сама, и выполненные останутся на месте. Заменятся только будущие блоки, созданные автоматически.')){const sn=snap(),r=rebuildPlan();rerender();undoToast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до конца года: '+r.left:''),sn)}}
  else if(a==='calprev'||a==='calnext'){const k=a==='calnext'?1:-1;if(calMode==='week')calDate=addDays(calDate,7*k);else{const d=parse(monthDate);d.setMonth(d.getMonth()+k,1);monthDate=iso(d)}rerender()}
  else if(a==='caltoday'){calDate=todayS();monthDate=todayS();rerender()}
  else if(a==='calmode'){
@@ -973,7 +973,7 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
  'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
  'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
-const PLAN_VERSION=4; // при смене окон повышаем: план перестроится сам при следующем открытии
+const PLAN_VERSION=5; // при смене окон повышаем: план перестроится сам при следующем открытии
 const PLAN_END='2027-06-30'; // конец плана: карта на ~280 блоков занимает около пяти месяцев
 const PLAN_SKIP=['2026-12-31','2027-01-01','2027-01-04','2027-01-05','2027-01-06','2027-01-07','2027-01-08','2027-02-23','2027-03-08','2027-05-03','2027-05-10']; // праздники (примерно) // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
@@ -987,27 +987,45 @@ function planSlots(date){
  return out;
 }
 // Ставит блоки по оставшимся темам на каждый будний день, начиная с сегодняшнего вечера. Будущие невыполненные блоки заменяются.
-function rebuildPlan(){
- const from=todayS(),nowD=new Date(),nowMin=nowD.getHours()*60+nowD.getMinutes();
- // выполненные блоки и прошлые дни остаются, все невыполненные с сегодняшнего дня заменяются
- S.blocks=S.blocks.filter(b=>b.done||b.date<from||b.manual||!isGo(b));
- const queue=[];
- TOPICS.forEach(t=>{const st=topicStatus(t.id);if(st==='done')return;
-  const have=S.blocks.filter(b=>b.topic===t.id&&(b.done||b.manual)).length; // уже сделанные блоки темы не планируем заново
-  for(let i=have+1;i<=t.blocks;i++)queue.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')})});
- let d=from,placed=0;
+// очередь недостающих блоков по порядку тем; counted: какие уже стоящие блоки считаются запланированными
+function planQueue(counted){
+ const q=[];
+ TOPICS.forEach(t=>{
+  if(topicStatus(t.id)==='done')return;
+  const have=S.blocks.filter(b=>isGo(b)&&b.topic===t.id&&counted(b)).length;
+  for(let i=have+1;i<=t.blocks;i++)q.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')});
+ });
+ return q;
+}
+// ставит блоки из очереди в свободные вечерние окна, начиная с сегодняшнего вечера; чужие блоки не трогает
+function placeQueue(queue){
+ const today=todayS(),nd=new Date(),nowMin=nd.getHours()*60+nd.getMinutes();
+ let d=today,placed=0;
  while(d<=PLAN_END&&queue.length){
   for(const st of planSlots(d)){
-   if(d===from&&st<=nowMin)continue;
-   if(goConflict(d,st,st+BLOCK_MIN))continue;
    if(!queue.length)break;
+   if(d===today&&st<=nowMin)continue;
+   if(S.blocks.some(b=>b.date===d&&st<b.start+b.dur&&st+BLOCK_MIN>b.start))continue;
    const q=queue.shift();
    S.blocks.push({id:uid(),title:q.title,topic:q.topic,date:d,start:st,dur:BLOCK_MIN,done:false});placed++;
   }
   d=addDays(d,1);
  }
- S.planV=PLAN_VERSION;save();
  return {placed,left:queue.length};
+}
+// автоматическое пополнение плана: НИЧЕГО не двигает и не удаляет, только добавляет недостающие блоки
+function fillPlan(){
+ const r=placeQueue(planQueue(()=>true));
+ S.planV=PLAN_VERSION;save();
+ return r;
+}
+// по кнопке: будущие автоматические блоки строятся заново. Сегодняшние, прошлые, ручные и выполненные остаются на месте
+function rebuildPlan(){
+ const from=todayS();
+ S.blocks=S.blocks.filter(b=>b.done||b.date<=from||b.manual||!isGo(b));
+ const r=placeQueue(planQueue(()=>true));
+ S.planV=PLAN_VERSION;save();
+ return r;
 }
 
 // ---------- статистика ----------
@@ -1252,7 +1270,7 @@ document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){cons
 function init(){
  applyTheme();banner();
  startIcons();
- if((S.planV||0)<PLAN_VERSION)rebuildPlan();
+ if((S.planV||0)<PLAN_VERSION)fillPlan();
  startVisit();setInterval(beat,5000);setInterval(()=>{if(route==='calendar')updateNowLine()},60000);
  setInterval(()=>{if(route==='home'){const c=document.getElementById('todaycard');if(c)c.outerHTML=todayCard()}},30000);
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});
