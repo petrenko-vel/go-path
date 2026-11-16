@@ -35,7 +35,21 @@ const PAIRS={
   3:[P('12:40','15:30','Роботизированные системы','лаб','207с','Пузановский'),P('15:40','17:00','Упр. ИТ-инфраструктурой','лаб','213с','Гамазов')],
   4:[P('12:40','14:00','Низкоуровневое прогр.','лек','209с','Нечипоренко'),P('14:10','15:30','Роботизированные системы','лек','300С','Пузановский'),P('15:40','17:00','Архитектура ИС','лек','201с','Никитин')],
   5:[P('15:40','17:00','Низкоуровневое прогр.','лаб','212с','Докучаев'),P('17:10','18:30','Роботизированные системы','практ','206С','Пузановский')]}};
-const pairsOn=s=>isWE(s)?[]:(PAIRS[parity(s)][dow(s)]||[]);
+// пары как в расписании (с устойчивым номером) и правки, которые ты внесла в календаре
+function basePairs(d){
+ return (isWE(d)?[]:(PAIRS[parity(d)][dow(d)]||[])).map(p=>Object.assign({},p,{id:d+'|'+fmtT(p.s)+'|'+p.name,date:d}));
+}
+function applyPairOv(p,o,d){return Object.assign({},p,{s:o.s!=null?o.s:p.s,e:o.e!=null?o.e:p.e,name:o.name||p.name,room:o.room!=null?o.room:p.room,note:o.note||'',date:d||p.date,edited:true})}
+function pairsOn(d){
+ const out=[];
+ basePairs(d).forEach(p=>{const o=S.pairOv[p.id];if(!o)out.push(p);else if(!o.off&&(!o.date||o.date===d))out.push(applyPairOv(p,o,d))});
+ Object.keys(S.pairOv).forEach(id=>{ // пары, перенесённые на этот день с другого
+  const o=S.pairOv[id],od=id.split('|')[0];
+  if(o.off||!o.date||o.date!==d||od===d)return;
+  const bp=basePairs(od).find(x=>x.id===id);if(bp)out.push(applyPairOv(bp,o,d));
+ });
+ return out.sort((a,b)=>a.s-b.s);
+}
 
 // ---------- темы ----------
 const TOPICS=[];
@@ -51,7 +65,7 @@ const STAT={new:'не начата',wip:'в работе',done:'освоена',
 // ---------- состояние ----------
 const KEY='gopath.v1';
 let storageOK=true;
-function defaults(){return {v:1,status:{'s0-0':'done'},doneAt:{'s0-0':'2026-11-10'},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],code:{},termHide:false,practice:{},practiceAt:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
+function defaults(){return {v:1,status:{'s0-0':'done'},doneAt:{'s0-0':'2026-11-10'},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],code:{},termHide:false,pairOv:{},workOv:{},workDef:null,practice:{},practiceAt:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
 function load(){
  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);return Object.assign(defaults(),o)}}catch(e){storageOK=false}
  return defaults();
@@ -60,6 +74,7 @@ let S=load();
 if(!S.practice||typeof S.practice!=='object')S.practice={};
 if(!S.practiceAt||typeof S.practiceAt!=='object')S.practiceAt={};
 if(!S.code||typeof S.code!=='object')S.code={};
+if(!S.pairOv)S.pairOv={};if(!S.workOv)S.workOv={};
 if(!S.track||typeof S.track!=='object')S.track={days:{},hours:{},topics:{},visits:[]};
 ['days','hours','topics'].forEach(k=>{if(!S.track[k])S.track[k]={}});if(!Array.isArray(S.track.visits))S.track.visits=[];
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storageOK=false;banner()}}
@@ -68,18 +83,53 @@ function toast(msg){const t=document.createElement('div');t.className='toast';t.
 
 // ---------- логика ----------
 function topicStatus(id){return S.status[id]||'new'}
-function setStatus(id,st){
+function setStatus(id,st,opts){
  const prev=topicStatus(id);S.status[id]=st;
  if(st==='done'){S.doneAt[id]=todayS();S.reviews=S.reviews.filter(r=>r.topic!==id||r.done);
   [3,7,21].forEach((n,i)=>S.reviews.push({id:uid(),topic:id,due:nextWeekday(addDays(todayS(),n)),step:i+1,done:false}));
   if(prev!=='done')toast('Тема освоена. '+REST_TIPS[Math.floor(Math.random()*REST_TIPS.length)]+' Повторения поставлены: +3 дня, +1 неделя, +3 недели.')}
  else if(st==='redo'){S.reviews.push({id:uid(),topic:id,due:nextWeekday(todayS()),step:0,done:false})}
+ else if(prev==='done'){S.reviews=S.reviews.filter(r=>r.topic!==id||r.done)} // тема больше не освоена: повторения не нужны
  save();
+ if(!(opts&&opts.fromBlocks))syncBlocksFromStatus(id,st,prev);
+}
+function isGo(b){return b.kind!=='other'}
+// статус темы меняется: блоки этой темы в календаре подстраиваются
+function syncBlocksFromStatus(id,st,prev){
+ const today=todayS();let changed=false;
+ if(st==='done'&&prev!=='done'){
+  S.blocks.forEach(b=>{if(isGo(b)&&b.topic===id&&!b.done&&b.date<=today){b.done=true;changed=true}});
+  const n=S.blocks.length;
+  S.blocks=S.blocks.filter(b=>!(isGo(b)&&b.topic===id&&!b.done&&b.date>today&&!b.manual));
+  if(S.blocks.length!==n)changed=true;
+  if(changed)rebuildPlan(); // освободившиеся вечера займут следующие темы
+ }else if(prev==='done'&&st!=='done'){ // тема снова не освоена: её блоки возвращаются в план
+  if(st==='new')S.blocks.forEach(b=>{if(isGo(b)&&b.topic===id&&b.done)b.done=false});
+  rebuildPlan();changed=true;
+ }else if(st==='new'&&prev!=='new'){
+  S.blocks.forEach(b=>{if(isGo(b)&&b.topic===id&&b.done){b.done=false;changed=true}});
+  if(changed)rebuildPlan();
+ }
+ if(changed)save();
+}
+// блок отмечен или снят: статус темы подстраивается
+function afterBlockDone(topicId,nowDone){
+ const t=TBY[topicId];if(!t)return;
+ const done=S.blocks.filter(b=>isGo(b)&&b.topic===topicId&&b.done).length,st=topicStatus(topicId);
+ if(nowDone){
+  if(done>=t.blocks){if(st!=='done')setStatus(topicId,'done',{fromBlocks:true})}
+  else if(st==='new')setStatus(topicId,'wip',{fromBlocks:true});
+ }else if(st==='done')setStatus(topicId,'wip',{fromBlocks:true});
+}
+function toggleBlockDone(id){
+ const b=S.blocks.find(x=>x.id===id);if(!b)return;
+ b.done=!b.done;save();
+ if(isGo(b)&&b.topic)afterBlockDone(b.topic,b.done);
 }
 function doneBlocks(){return TOPICS.filter(t=>topicStatus(t.id)==='done').reduce((a,t)=>a+t.blocks,0)}
 function activityDays(){
  const set=new Set();
- S.blocks.filter(b=>b.done).forEach(b=>set.add(b.date));
+ S.blocks.filter(b=>b.done&&isGo(b)).forEach(b=>set.add(b.date));
  S.sessions.forEach(x=>set.add(x.date));S.tasks.forEach(x=>set.add(x.date));Object.values(S.practiceAt).forEach(d=>set.add(d));
  Object.values(S.doneAt).forEach(d=>set.add(d));
  S.reviews.filter(r=>r.done&&r.doneAt).forEach(r=>set.add(r.doneAt));
@@ -96,7 +146,7 @@ function nextTopic(){return TOPICS.find(t=>topicStatus(t.id)!=='done'&&topicStat
 function dueReviews(){const t=todayS();return S.reviews.filter(r=>!r.done&&r.due<=t)}
 function paceInfo(){
  const from=addDays(todayS(),-14);
- const dn=S.blocks.filter(b=>b.done&&b.date>=from).length+S.sessions.filter(s=>s.date>=from&&s.mode==='timer').length;
+ const dn=S.blocks.filter(b=>b.done&&isGo(b)&&b.date>=from).length+S.sessions.filter(s=>s.date>=from&&s.mode==='timer').length;
  return dn;
 }
 
@@ -131,10 +181,10 @@ function progressBar(p){return '<div class="bar" role="progressbar" aria-valueno
 function todayCard(){
  const t=todayS(),nowD=new Date(),now=nowD.getHours()*60+nowD.getMinutes();
  const todayBlocks=S.blocks.filter(b=>b.date===t).sort((a,b)=>a.start-b.start);
- const goTotal=todayBlocks.length,goDone=todayBlocks.filter(b=>b.done).length;
+ const goTotal=todayBlocks.filter(isGo).length,goDone=todayBlocks.filter(b=>isGo(b)&&b.done).length;
  const wk=workOn(t);
  const all=(wk?[{s:wk.s,e:wk.e,kind:'work',title:'Работа',sub:''}]:[]).concat(pairsOn(t).map(p=>({s:p.s,e:p.e,kind:'pair',title:p.name,sub:p.kind+(p.room?', '+p.room:'')})))
-  .concat(todayBlocks.map(b=>({s:b.start,e:b.start+b.dur,kind:'go',title:b.title,id:b.id,done:b.done}))).sort((a,b)=>a.s-b.s);
+  .concat(todayBlocks.map(b=>({s:b.start,e:b.start+b.dur,kind:isGo(b)?'go':'other',title:b.title,id:b.id,done:b.done}))).sort((a,b)=>a.s-b.s);
  // прошедшее прячем; невыполненный блок Go не прячем, чтобы его можно было отметить
  const items=all.filter(x=>x.e>now||(x.kind==='go'&&!x.done));
  const hiddenCount=all.length-items.length;
@@ -142,8 +192,8 @@ function todayCard(){
   +(isWE(t)&&!all.length?'<div class="hempty"><div class="he-ic">🌿</div><b>Выходной</b><div class="small mute">Отдыхай. Занятия по плану только в будни.</div></div>'
    :items.length?'<div class="tline">'+items.map(x=>{const nowOn=x.s<=now&&now<x.e,late=x.kind==='go'&&!x.done&&x.e<=now;
      return '<div class="tl '+x.kind+(x.done?' done':'')+(nowOn?' now':'')+(late?' late':'')+'"><div class="tl-time">'+fmtT(x.s)+'<br><span class="small mute">'+fmtT(x.e)+'</span></div><div class="tl-body"><b>'+esc(x.title)+'</b>'
-      +'<div class="small mute">'+(nowOn?'<span class="nowbadge">идёт сейчас</span> ':'')+(late?'не отмечен · ':'')+(x.kind==='pair'?'пара · '+esc(x.sub):x.kind==='work'?'учёба вечером':'блок Go')+'</div></div>'
-      +(x.kind==='go'?'<button class="btn sm'+(x.done?' on':'')+'" data-act="bdone" data-id="'+x.id+'">'+(x.done?'Готово ✓':'Отметить')+'</button>':'')+'</div>'}).join('')+'</div>'
+      +'<div class="small mute">'+(nowOn?'<span class="nowbadge">идёт сейчас</span> ':'')+(late?'не отмечен · ':'')+(x.kind==='pair'?'пара · '+esc(x.sub):x.kind==='work'?'учёба вечером':x.kind==='other'?'дело':'блок Go')+'</div></div>'
+      +(x.kind==='go'||x.kind==='other'?'<button class="btn sm'+(x.done?' on':'')+'" data-act="bdone" data-id="'+x.id+'">'+(x.done?'Готово ✓':'Отметить')+'</button>':'')+'</div>'}).join('')+'</div>'
    :'<div class="hempty"><div class="he-ic">'+(hiddenCount?'🌙':'☕')+'</div><b>'+(hiddenCount?'На сегодня всё':'На сегодня ничего нет')+'</b>'+(hiddenCount?'<div class="small mute">Все дела на сегодня позади.</div>':'')+'</div>')
   +'<div class="row hc-act"><a class="btn sm ghost" href="#calendar">Открыть календарь</a></div></div>';
 }
@@ -390,7 +440,7 @@ function practiceBlock(t){
 }
 let taskFilter='all';
 function vTasks(){
- const t0=todayS(),nt=nextTopic(),todayBlocks=S.blocks.filter(b=>b.date===t0).sort((a,b)=>a.start-b.start);
+ const t0=todayS(),nt=nextTopic(),todayBlocks=S.blocks.filter(b=>b.date===t0&&isGo(b)).sort((a,b)=>a.start-b.start);
  const totalItems=TOPICS.reduce((a,t)=>a+practiceItems(t).length,0),doneItems=TOPICS.reduce((a,t)=>a+practiceDone(t.id),0);
  let h='<h1>Практика</h1><p class="mute">Задания берутся из конспектов тем, записывать ничего не нужно: открой тему, делай и отмечай. Всего выполнено: <b>'+doneItems+'</b> из '+totalItems+'.</p>';
  h+='<div class="card"><h3>Практика на сегодня</h3>'
@@ -453,7 +503,7 @@ function vMaterials(){
 function vSetup(){
  return '<h1>Данные и настройки</h1>'
  +'<div class="card"><h3>Тема оформления</h3><div class="row">'+[['auto','Как в системе'],['light','Светлая'],['dark','Тёмная']].map(x=>'<button class="btn sm'+(S.theme===x[0]?' on':'')+'" data-act="theme" data-v="'+x[0]+'">'+x[1]+'</button>').join('')+'</div></div>'
- +'<div class="card"><h3>Расписание пар</h3><p class="small">Взято из твоей Google-таблицы. Числитель с понедельника 14.09.2026, недели чередуются. Сейчас: <b>'+(parity(todayS())==='Ч'?'числитель':'знаменатель')+'</b>. Если пары изменятся, скажи мне в чате, я обновлю сайт.</p></div>'
+ +'<div class="card"><h3>Расписание пар</h3><p class="small">Взято из твоей Google-таблицы. Числитель с понедельника 14.09.2026, недели чередуются. Сейчас: <b>'+(parity(todayS())==='Ч'?'числитель':'знаменатель')+'</b>. Разовые изменения вноси прямо в календаре: нажми на пару или на работу.</p></div>'
  +'<div class="card"><h3>Резервная копия</h3><p class="small mute">Прогресс, календарь и статистика хранятся только в этом браузере: очистка данных сайта сотрёт всё. Сохрани файл и при необходимости загрузи его обратно.'+(S.lastBackup?' Последняя копия: '+fmtD(S.lastBackup)+'.':' Копий ещё не было.')+'</p><div class="row"><button class="btn pri" data-act="dlbackup">Скачать копию</button><label class="btn" tabindex="0">Загрузить из файла<input type="file" id="impf" accept=".json,application/json" hidden></label></div></div>'
  +'<div class="card"><h3>Сброс</h3><p><button class="btn danger" data-act="reset">Стереть всё</button></p></div>';
 }
@@ -463,14 +513,14 @@ const HH=64;let CAL0=8*60,CAL1=21*60,calAuto=true;
 let calScroll=null,calScrollX=0; // положение прокрутки сетки календаря (null: выставить автоматически)
 const PAIR_NO={'11:10':3,'12:40':4,'14:10':5,'15:40':6,'17:10':7};
 function isMissed(b){const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),t=todayS();return !b.done&&(b.date<t||(b.date===t&&b.start+b.dur<=nm))}
-function snap(){return JSON.stringify(S.blocks)}
+function snap(){return JSON.stringify({b:S.blocks,p:S.pairOv,w:S.workOv,d:S.workDef})}
 // сообщение с кнопкой «Отменить»: возвращает блоки к снимку
 function undoToast(msg,snapshot){
  document.querySelectorAll('.toast').forEach(x=>x.remove());
  const t=document.createElement('div');t.className='toast act';t.setAttribute('role','status');
  const sp=document.createElement('span');sp.textContent=msg;
  const bt=document.createElement('button');bt.type='button';bt.className='btn sm';bt.textContent='Отменить';
- bt.onclick=()=>{S.blocks=JSON.parse(snapshot);save();t.remove();rerender()};
+ bt.onclick=()=>{const o=JSON.parse(snapshot);if(Array.isArray(o))S.blocks=o;else{S.blocks=o.b;S.pairOv=o.p||{};S.workOv=o.w||{};S.workDef=o.d||null}save();t.remove();rerender()};
  t.appendChild(sp);t.appendChild(bt);document.body.appendChild(t);setTimeout(()=>t.remove(),9000);
 }
 function updateBlkInfo(){
@@ -489,12 +539,12 @@ function vCalendar(){
  const jump=calMode==='week'?calDate:monthDate;
  const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b>'
   +'<input type="date" id="caljump" class="caljump" aria-label="Перейти к дате" value="'+jump+'">'
-  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm pri" data-act="newblock">+ Блок</button></div>';
- const leg='<p class="small mute legend"><span class="chip" style="background:var(--pair)">пара</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span><span class="chip">блок Go</span><span class="chip ok">выполнен</span><span class="chip warn">пропущен</span> Тяни блок, чтобы перенести. Галочка в углу отмечает выполненным. Нажми на пустое время, чтобы добавить блок.</p>';
+  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm pri" data-act="newblock">+ Дело</button></div>';
+ const leg='<p class="small mute legend"><span class="chip" style="background:var(--pair)">пара</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span><span class="chip">блок Go</span><span class="chip" style="background:color-mix(in srgb,#c98a1b 22%,var(--card))">другое дело</span><span class="chip ok">выполнен</span><span class="chip warn">пропущен</span> Тяни блок, чтобы перенести. Галочка в углу отмечает выполненным. Нажми на пару или работу, чтобы изменить или перенести. Нажми на пустое время, чтобы добавить дело.</p>';
  return '<h1>Календарь</h1>'+head+planInfo()+(calMode==='week'?weekView():monthView())+leg;
 }
 function weekSummary(days){
- const bs=S.blocks.filter(b=>days.includes(b.date)),dn=bs.filter(b=>b.done).length,mins=bs.reduce((a,b)=>a+b.dur,0);
+ const bs=S.blocks.filter(b=>days.includes(b.date)&&isGo(b)),dn=bs.filter(b=>b.done).length,mins=bs.reduce((a,b)=>a+b.dur,0);
  return '<div class="wsum"><span><b>'+bs.length+'</b> блоков на неделе</span><span><b>'+dn+'</b> выполнено</span><span>≈ <b>'+Math.round(mins/60*10)/10+'</b> ч занятий</span>'+(bs.length?'<span class="wbar">'+progressBar(dn/bs.length*100)+'</span>':'')+'</div>';
 }
 // видимые часы: 8–21, но шире, если на неделе есть блоки вне этого диапазона
@@ -521,20 +571,19 @@ function weekView(){
  let hours='<div class="hours">'+[...Array((CAL1-CAL0)/60)].map((_,i)=>'<div>'+pad(CAL0/60+i)+':00</div>').join('')+'</div>';
  let cols=days.map(d=>{
   const we=isWE(d);let ev='';
-  if(!we){
-   const ps=pairsOn(d),wk=workOn(d);
-   if(wk)ev+=evBox(wk.s,wk.e,'work','<b>Работа</b> '+fmtT(wk.s)+'–'+fmtT(wk.e));
-   if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
-    ev+=evBox(a,ps[0].s,'travel','дорога · 40 мин');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога · 25 мин');
-    ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'–'+fmtT(p.e)+'</b>'+(PAIR_NO[fmtT(p.s)]?' <span class="pno">'+PAIR_NO[fmtT(p.s)]+' пара</span>':'')+'<br>'+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
-  }
+  const ps=pairsOn(d),wk=workOn(d);
+  if(wk)ev+=evBox(wk.s,wk.e,'work','<b>Работа</b> '+fmtT(wk.s)+'–'+fmtT(wk.e),' data-wd="'+d+'" tabindex="0" role="button" title="Работа: нажми, чтобы изменить время"');
+  if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
+   ev+=evBox(a,ps[0].s,'travel','дорога · 40 мин');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога · 25 мин');
+   ps.forEach(p=>ev+=evBox(p.s,p.e,'pair'+(p.edited?' edited':''),'<b>'+fmtT(p.s)+'–'+fmtT(p.e)+'</b>'+(PAIR_NO[fmtT(p.s)]?' <span class="pno">'+PAIR_NO[fmtT(p.s)]+' пара</span>':'')+'<br>'+esc(p.name)+' ('+esc(p.kind)+(p.room?', '+esc(p.room):'')+')'+(p.note?' <span class="bnote">✎</span>':''),
+    ' data-pid="'+esc(p.id)+'" data-date="'+d+'" tabindex="0" role="button" title="'+esc(p.name+(p.note?'. '+p.note:'')+' (нажми, чтобы изменить или перенести)')+'"'))}
   const bs=S.blocks.filter(b=>b.date===d),lay=laneLayout(bs);
   bs.forEach(b=>{
-   const miss=isMissed(b),stt=b.done?'выполнен':miss?'пропущен':'запланирован';
+   const miss=isGo(b)&&isMissed(b),stt=b.done?'выполнено':miss?'пропущен':'запланировано';
    const ttl=fmtT(b.start)+'–'+fmtT(Math.min(1440,b.start+b.dur))+' · '+b.title+' ('+stt+')'+(b.note?'. '+b.note:'');
    const chk=b.done?'Снять отметку о выполнении':'Отметить выполненным',L=lay[b.id]||{lane:0,lanes:1};
    const xs=L.lanes>1?'left:calc(3px + (100% - 6px) * '+L.lane+' / '+L.lanes+');right:auto;width:calc((100% - 6px) / '+L.lanes+' - 2px);':'';
-   ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':'')+(miss?' missed':'')+(L.lanes>1?' lane':''),
+   ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':'')+(miss?' missed':'')+(L.lanes>1?' lane':'')+(isGo(b)?'':' oth cat-'+(b.cat||'other')),
     '<button class="bchk" type="button" data-act="bdone" data-id="'+b.id+'" aria-label="'+chk+'" title="'+chk+'">✓</button><b>'+fmtT(b.start)+'</b> '+esc(b.title)+(b.note?' <span class="bnote">✎</span>':''),
     ' data-bid="'+b.id+'" tabindex="0" role="button" title="'+esc(ttl)+'" aria-label="'+esc(ttl)+'"',xs);
   });
@@ -554,8 +603,8 @@ function monthView(){
  const first=iso(new Date(y,m,1)),start=mondayOf(first),t=todayS();
  let cells='';
  for(let i=0;i<42;i++){const s=addDays(start,i);if(i>=35&&parse(s).getMonth()!==m)break;
-  const bl=S.blocks.filter(b=>b.date===s),dn=bl.filter(b=>b.done).length;
-  cells+='<button class="mcell'+(isWE(s)?' we':'')+(parse(s).getMonth()!==m?' out':'')+(s===t?' today':'')+'" data-act="gotoweek" data-date="'+s+'" aria-label="'+fmtD(s)+'"><b>'+parse(s).getDate()+'</b>'+(dow(s)===1?' <span class="small mute">'+parity(s)+'</span>':'')+(bl.length?'<br><span class="chip">Go '+dn+'/'+bl.length+'</span>':'')+'</button>';}
+  const all=S.blocks.filter(b=>b.date===s),bl=all.filter(isGo),dn=bl.filter(b=>b.done).length,ot=all.length-bl.length;
+  cells+='<button class="mcell'+(isWE(s)?' we':'')+(parse(s).getMonth()!==m?' out':'')+(s===t?' today':'')+'" data-act="gotoweek" data-date="'+s+'" aria-label="'+fmtD(s)+'"><b>'+parse(s).getDate()+'</b>'+(dow(s)===1?' <span class="small mute">'+parity(s)+'</span>':'')+(bl.length?'<br><span class="chip">Go '+dn+'/'+bl.length+'</span>':'')+(ot?'<br><span class="chip">дел: '+ot+'</span>':'')+'</button>';}
  return '<p class="small mute" id="calsub" data-ttl="'+MONN[m]+' '+y+'">Нажми на день, чтобы открыть неделю. Ч и З у понедельников — числитель и знаменатель.</p><div class="mgrid" style="margin-bottom:4px">'+DOW.map(x=>'<div class="small mute" style="text-align:center">'+x+'</div>').join('')+'</div><div class="mgrid">'+cells+'</div>';
 }
 function bindCalendar(){
@@ -568,6 +617,8 @@ function bindCalendar(){
    openBlock(null,{date:col.dataset.date,start:mins});
   });
  });
+ document.querySelectorAll('.ev.pair').forEach(n=>{n.addEventListener('click',()=>openPair(n.dataset.pid,n.dataset.date));n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPair(n.dataset.pid,n.dataset.date)}})});
+ document.querySelectorAll('.ev.work').forEach(n=>{n.addEventListener('click',()=>openWork(n.dataset.wd));n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openWork(n.dataset.wd)}})});
  let touchTap=null; // на телефоне блок не перетаскивают (мешает прокрутке): касание открывает окно блока
  document.querySelectorAll('.ev.go').forEach(n=>{
   n.addEventListener('pointerdown',e=>{if(e.target.closest('.bchk'))return;if(e.pointerType==='touch'){touchTap=n.dataset.bid;return}startDrag(e,n)});
@@ -585,9 +636,12 @@ function autoScrollCal(){
 }
 const WORK_START=9*60,WORK_END=12*60; // по утрам в будни работа, учёба вечером
 function workOn(d){
+ const o=S.workOv[d];
+ if(o&&o.off)return null;
+ if(o&&o.s!=null)return {s:o.s,e:o.e};
  if(isWE(d))return null;
- const ps=pairsOn(d),e=Math.min(WORK_END,ps.length?ps[0].s-40:WORK_END);
- return e>WORK_START?{s:WORK_START,e}:null;
+ const def=S.workDef||{s:WORK_START,e:WORK_END},ps=pairsOn(d),e=Math.min(def.e,ps.length?ps[0].s-40:def.e);
+ return e>def.s?{s:def.s,e}:null;
 }
 // почему время занято: работа, пара или дорога (пустая строка, если свободно)
 function busyReason(date,s,e){
@@ -627,18 +681,16 @@ function conflictNote(date,s,e,ignoreId){
 // ближайшее свободное вечернее окно для нового блока
 function suggestSlot(){
  const nowD=new Date(),nm=nowD.getHours()*60+nowD.getMinutes(),today=todayS();
+ const free=(d,st)=>!busyReason(d,st,st+BLOCK_MIN)&&!S.blocks.some(b=>b.date===d&&st<b.start+b.dur&&st+BLOCK_MIN>b.start);
  let d=today;
- for(let i=0;i<60;i++,d=addDays(d,1)){
+ for(let i=0;i<21;i++,d=addDays(d,1)){
   if(isWE(d))continue;
   for(const w of (GO_WIN[parity(d)][dow(d)]||[])){
    const [a,b]=w.split('-').map(toMin);
-   for(let st=a;st+BLOCK_MIN<=b;st+=BLOCK_STEP){
-    if(d===today&&st<=nm)continue;
-    if(!conflictMsg(d,st,st+BLOCK_MIN))return {date:d,start:st};
-   }
+   for(let st=a;st+BLOCK_MIN<=b;st+=BLOCK_STEP){if(d===today&&st<=nm)continue;if(free(d,st))return {date:d,start:st}}
   }
  }
- return {date:nextWeekday(today),start:17*60+30};
+ return {date:nextWeekday(addDays(today,1)),start:17*60+30};
 }
 // сколько блоков плана не поместилось в календарь
 function planInfo(){
@@ -646,7 +698,7 @@ function planInfo(){
  const need=open.reduce((a,x)=>a+Math.max(0,x.blocks-S.blocks.filter(b=>b.topic===x.id&&b.done).length),0);
  const planned=S.blocks.filter(b=>!b.done&&b.date>=t&&!isMissed(b)&&ids.has(b.topic));
  const gap=Math.max(0,need-planned.length),last=planned.reduce((m,b)=>b.date>m?b.date:m,'');
- const missed=S.blocks.filter(isMissed).length;
+ const missed=S.blocks.filter(b=>isGo(b)&&isMissed(b)).length;
  const pl=n=>n%10===1&&n%100!==11?'блок':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'блока':'блоков';
  return '<div class="planinfo'+(gap||missed?' warn':'')+'"><div class="pi-text"><b>В плане:</b> '+planned.length+' '+pl(planned.length)+(last?' до '+fmtD(last):'')+'. '
   +(missed?'<b>Пропущено: '+missed+'.</b> ':'')
@@ -654,7 +706,7 @@ function planInfo(){
   +'<div class="pi-act">'+(missed?'<button class="btn sm pri" data-act="movemissed">Перенести пропущенные</button>':'')+'<button class="btn sm ghost" data-act="rebuildplan">Перестроить план</button></div></div>';
 }
 function tryPlace(b,date,start){
- b.date=date;b.start=start;b.manual=true;save();rebuildPlan();return true;
+ b.date=date;b.start=start;b.manual=true;save();return true;
 }
 function startDrag(e,node){
  if(e.button!==undefined&&e.button!==0)return;
@@ -692,14 +744,55 @@ function startDrag(e,node){
  };
  node.addEventListener('pointermove',mv);node.addEventListener('pointerup',up);node.addEventListener('pointercancel',up);
 }
+const BCATS=[['work','Работа'],['study','Учёба'],['personal','Личное'],['other','Другое']];
+function toggleKind(f){
+ const go=f.kind.value==='go';
+ f.querySelectorAll('.only-go').forEach(e=>{e.hidden=!go});
+ f.querySelectorAll('.only-other').forEach(e=>{e.hidden=go});
+}
 function openBlock(id,pre){
  const b=id?S.blocks.find(x=>x.id===id):null;
- const nt=nextTopic();
- const slot=suggestSlot();
- const v=b||Object.assign({title:nt?'Go: '+nt.title:'Go',topic:nt?nt.id:'',date:slot.date,start:slot.start,dur:50,done:false},pre||{});
+ const nt=nextTopic(),slot=suggestSlot();
+ const v=b||Object.assign({kind:'go',cat:'other',title:nt?'Go: '+nt.title:'Go',topic:nt?nt.id:'',date:slot.date,start:slot.start,dur:50,done:false},pre||{});
+ const kind=v.kind==='other'?'other':'go';
  const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
- m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Блок':'Новый блок')+'</h3><label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select><div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required step="300" value="'+fmtT(v.start)+'"></div></div><div class="row moveq"><span class="small mute">Перенести:</span>'+[['today','Сегодня'],['tomorrow','Завтра'],['d1','+1 день'],['w1','+1 неделя'],['am','Утро'],['day','День'],['eve','Вечер']].map(x=>'<button class="btn sm" type="button" data-act="mvq" data-k="'+x[0]+'">'+x[1]+'</button>').join('')+'</div><label>Длительность, мин</label><input type="number" name="dur" min="15" max="180" step="5" value="'+v.dur+'"><div class="row durq">'+[30,45,50,60,90].map(n=>'<button class="btn sm" type="button" data-act="setdur" data-v="'+n+'">'+n+'</button>').join('')+'</div><div class="blkinfo" id="blkinfo"></div><label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнен</label><label>Заметка</label><textarea name="note" rows="2" placeholder="Что сделать, ссылка, вопрос">'+esc(v.note||'')+'</textarea><input type="hidden" name="id" value="'+(b?b.id:'')+'"><p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn" type="button" data-act="dupblock" data-id="'+b.id+'">Копия на завтра</button><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
- document.body.appendChild(m);updateBlkInfo();const f=m.querySelector('input[name=title]');f&&f.focus();
+ m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Дело':'Новое дело')+'</h3>'
+  +'<label>Что это</label><select name="kind"><option value="go"'+(kind==='go'?' selected':'')+'>Занятие по Go (из плана обучения)</option><option value="other"'+(kind==='other'?' selected':'')+'>Другое дело</option></select>'
+  +'<label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'">'
+  +'<div class="only-go"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select></div>'
+  +'<div class="only-other"><label>Категория</label><select name="cat">'+BCATS.map(c=>'<option value="'+c[0]+'"'+(v.cat===c[0]?' selected':'')+'>'+c[1]+'</option>').join('')+'</select></div>'
+  +'<div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required step="300" value="'+fmtT(v.start)+'"></div></div>'
+  +'<div class="row moveq"><span class="small mute">Перенести:</span>'+[['today','Сегодня'],['tomorrow','Завтра'],['d1','+1 день'],['w1','+1 неделя'],['am','Утро'],['day','День'],['eve','Вечер']].map(x=>'<button class="btn sm" type="button" data-act="mvq" data-k="'+x[0]+'">'+x[1]+'</button>').join('')+'</div>'
+  +'<label>Длительность, мин</label><input type="number" name="dur" min="15" max="600" step="5" value="'+v.dur+'"><div class="row durq">'+[30,45,50,60,90].map(n=>'<button class="btn sm" type="button" data-act="setdur" data-v="'+n+'">'+n+'</button>').join('')+'</div><div class="blkinfo" id="blkinfo"></div>'
+  +'<label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнено</label>'
+  +'<label>Заметка</label><textarea name="note" rows="2" placeholder="Что сделать, ссылка, вопрос">'+esc(v.note||'')+'</textarea>'
+  +'<input type="hidden" name="id" value="'+(b?b.id:'')+'">'
+  +'<p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn" type="button" data-act="dupblock" data-id="'+b.id+'">Копия на завтра</button><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
+ document.body.appendChild(m);toggleKind(m.querySelector('form'));updateBlkInfo();const f=m.querySelector('input[name=title]');f&&f.focus();
+}
+// окно пары: изменить время, аудиторию, перенести на другой день, отменить
+function openPair(id,date){
+ const od=id.split('|')[0],bp=basePairs(od).find(x=>x.id===id);if(!bp)return;
+ const cur=pairsOn(date).find(x=>x.id===id)||bp;
+ const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
+ m.innerHTML='<form class="box" data-form="pair"><h3>Пара</h3><p class="small mute">По расписанию: '+esc(bp.name)+', '+fmtD(od)+', '+fmtT(bp.s)+'–'+fmtT(bp.e)+'. Правка действует только для этого занятия.</p>'
+  +'<label>Название</label><input type="text" name="name" required value="'+esc(cur.name)+'">'
+  +'<label>Аудитория</label><input type="text" name="room" value="'+esc(cur.room||'')+'">'
+  +'<div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+date+'"></div><div><label>Начало</label><input type="time" name="start" required step="300" value="'+fmtT(cur.s)+'"></div><div><label>Конец</label><input type="time" name="end" required step="300" value="'+fmtT(cur.e)+'"></div></div>'
+  +'<label>Заметка</label><textarea name="note" rows="2" placeholder="Например: перенесли, взять ноутбук">'+esc(cur.note||'')+'</textarea><input type="hidden" name="pid" value="'+esc(id)+'">'
+  +'<p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button><span class="sp"></span>'+(S.pairOv[id]?'<button class="btn" type="button" data-act="pairreset" data-pid="'+esc(id)+'">Как в расписании</button>':'')+'<button class="btn danger" type="button" data-act="pairoff" data-pid="'+esc(id)+'">Пары не будет</button></p></form>';
+ document.body.appendChild(m);
+}
+// окно работы: время на этот день, выходной, или для всех будней
+function openWork(date){
+ const w=workOn(date)||{s:WORK_START,e:WORK_END},o=S.workOv[date];
+ const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
+ m.innerHTML='<form class="box" data-form="work"><h3>Работа, '+fmtD(date)+'</h3>'
+  +'<div class="row"><div><label>С</label><input type="time" name="start" step="300" value="'+fmtT(w.s)+'"></div><div><label>До</label><input type="time" name="end" step="300" value="'+fmtT(w.e)+'"></div></div>'
+  +'<label><input type="checkbox" name="all"> Так во все будни (по умолчанию)</label>'
+  +'<label><input type="checkbox" name="off"> В этот день работы нет</label><input type="hidden" name="wdate" value="'+date+'">'
+  +'<p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(o?'<span class="sp"></span><button class="btn" type="button" data-act="workreset" data-wd="'+date+'">Как по умолчанию</button>':'')+'</p></form>';
+ document.body.appendChild(m);
 }
 
 // ---------- таймер ----------
@@ -745,6 +838,9 @@ document.addEventListener('click',e=>{
  else if(a==='runcode'){runCode()}
  else if(a==='resetcode'){const id=$('#term').dataset.id;delete S.code[id];save();const ta=$('#codeed');ta.value=starterCode(TBY[id]);updateGutter();$('#termout').textContent='';const st=$('#termstatus');st.className='term-st';st.textContent='Код сброшен к примеру из конспекта'}
  else if(a==='termtoggle'){S.termHide=!S.termHide;save();const y=scrollY;render();scrollTo(0,y)}
+ else if(a==='pairoff'){const sn=snap(),pid=el.dataset.pid;S.pairOv[pid]=Object.assign({},S.pairOv[pid]||{},{off:true});save();const m=$('.modal');m&&m.remove();rerender();undoToast('Пара убрана из этого дня',sn)}
+ else if(a==='pairreset'){const sn=snap();delete S.pairOv[el.dataset.pid];save();const m=$('.modal');m&&m.remove();rerender();undoToast('Пара возвращена как в расписании',sn)}
+ else if(a==='workreset'){const sn=snap();delete S.workOv[el.dataset.wd];save();const m=$('.modal');m&&m.remove();rerender();undoToast('Работа возвращена по умолчанию',sn)}
  else if(a==='mvq'){const f=document.querySelector('form[data-form=block]');if(f){
   const k=el.dataset.k,add=n=>{f.date.value=addDays(f.date.value||todayS(),n)};
   if(k==='today')f.date.value=todayS();else if(k==='tomorrow')f.date.value=addDays(todayS(),1);else if(k==='d1')add(1);else if(k==='w1')add(7);
@@ -752,7 +848,7 @@ document.addEventListener('click',e=>{
   updateBlkInfo()}}
  else if(a==='dupblock'){const b=S.blocks.find(x=>x.id===id);if(b){const sn=snap();S.blocks.push(Object.assign({},b,{id:uid(),date:addDays(b.date,1),done:false,manual:true}));save();const m=$('.modal');m&&m.remove();rerender();undoToast('Копия создана на '+fmtD(addDays(b.date,1)),sn)}}
  else if(a==='setdur'){const f=document.querySelector('form[data-form=block]');if(f){f.dur.value=el.dataset.v;updateBlkInfo()}}
- else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!isMissed(x));rebuildPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
+ else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!(isGo(x)&&isMissed(x)));rebuildPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
  else if(a==='mfilter'){const y=scrollY;if(el.dataset.k==='type')matType=el.dataset.v;else matLang=el.dataset.v;render();scrollTo(0,y)}
  else if(a==='newq'){qShift++;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='mreset'){matType='all';matLang='all';matStage='all';matQ='';render()}
@@ -760,14 +856,14 @@ document.addEventListener('click',e=>{
  else if(a==='tab'){topicTab=el.dataset.tab;render()}
  else if(a==='plan'){openBlock(null,{title:'Go: '+TBY[id].title,topic:id})}
  else if(a==='revdone'){const r=S.reviews.find(x=>x.id===id);if(r){r.done=true;r.doneAt=todayS();save();render()}}
- else if(a==='bdone'){const b=S.blocks.find(x=>x.id===id);if(b){b.done=!b.done;save();rerender()}}
+ else if(a==='bdone'){toggleBlockDone(id);rerender()}
  else if(a==='openpractice'){topicTab='task'}
  else if(a==='tfilter'){taskFilter=el.dataset.v;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='ptoggle'){const i=el.dataset.i,pr=S.practice[id]=S.practice[id]||{};
   if(el.checked){pr[i]=true;S.practiceAt[id+':'+i]=todayS()}else{delete pr[i];delete S.practiceAt[id+':'+i]}
   save();const y=scrollY;render();scrollTo(0,y)}
  else if(a==='closemodal'){const m=$('.modal');m&&m.remove()}
- else if(a==='delblock'){const sn=snap();S.blocks=S.blocks.filter(x=>x.id!==id);save();const m=$('.modal');m&&m.remove();rerender();undoToast('Блок удалён',sn)}
+ else if(a==='delblock'){const sn=snap(),old=S.blocks.find(x=>x.id===id);S.blocks=S.blocks.filter(x=>x.id!==id);save();if(old&&isGo(old)&&old.topic&&old.done)afterBlockDone(old.topic,false);const m=$('.modal');m&&m.remove();rerender();undoToast('Дело удалено',sn)}
  else if(a==='newblock'){openBlock(null,{})}
  else if(a==='rebuildplan'){if(confirm('Построить план заново по оставшимся темам? Блоки, которые ты добавила или двигала сама, и выполненные останутся на месте, остальные будущие блоки заменятся.')){const sn=snap(),r=rebuildPlan();rerender();undoToast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до конца года: '+r.left:''),sn)}}
  else if(a==='calprev'||a==='calnext'){const k=a==='calnext'?1:-1;if(calMode==='week')calDate=addDays(calDate,7*k);else{const d=parse(monthDate);d.setMonth(d.getMonth()+k,1);monthDate=iso(d)}rerender()}
@@ -786,6 +882,11 @@ document.addEventListener('click',e=>{
  else if(a==='ttoggle'){const p=$('#tpanel');p.hidden=!p.hidden;if(!p.hidden)p.innerHTML=timerPanel()}
 });
 document.addEventListener('change',e=>{
+ if(e.target.name==='kind'&&e.target.form&&e.target.form.dataset.form==='block'){
+  const f=e.target.form;toggleKind(f);
+  if(f.kind.value==='other'&&/^Go(:|$)/.test(f.title.value))f.title.value='';
+  if(f.kind.value==='go'&&!f.title.value){const nt=nextTopic();if(nt)f.title.value='Go: '+nt.title}
+  updateBlkInfo();return}
  if(e.target.id==='caljump'){const v=e.target.value;if(v){calDate=v;monthDate=v;rerender()}return}
  if(e.target.name==='topic'&&e.target.closest&&e.target.closest('form[data-form=block]')){const f=e.target.form,tp=TBY[e.target.value];if(tp&&(!f.title.value||/^Go(:|$)/.test(f.title.value)))f.title.value='Go: '+tp.title;updateBlkInfo();return}
  if(e.target.id==='termsample'){
@@ -807,12 +908,37 @@ document.addEventListener('submit',e=>{
   S.links.push({topic:fd.topic||'',title:fd.title,url:fd.url,type:fd.type,lang:fd.lang});save();render();toast('Ссылка добавлена')}
 
  else if(k==='block'){
-  const dur=Math.max(15,+fd.dur||50),start=toMin(fd.start);
+  const dur=Math.max(15,+fd.dur||50),start=toMin(fd.start),kind=fd.kind==='other'?'other':'go';
   let b=fd.id?S.blocks.find(x=>x.id===fd.id):null;
-  const tmp={dur,date:b?b.date:fd.date,start:b?b.start:start};
+  const oldTopic=b&&isGo(b)?b.topic:'',wasDone=b?b.done:false;
   if(!b){b={id:uid()};S.blocks.push(b)}
-  Object.assign(b,{title:fd.title,topic:fd.topic||'',date:fd.date,start,dur:Math.min(dur,1440-start),done:!!fd.done,manual:true,note:(fd.note||'').trim()});
-  save();if(!fd.done)rebuildPlan();const m=$('.modal');m&&m.remove();rerender()}
+  Object.assign(b,{kind,cat:kind==='other'?(fd.cat||'other'):undefined,title:fd.title,topic:kind==='go'?(fd.topic||''):'',date:fd.date,start,dur:Math.min(dur,1440-start),done:!!fd.done,manual:true,note:(fd.note||'').trim()});
+  save();
+  // статусы тем подстраиваются под отметки в календаре
+  if(kind==='go'){
+   if(oldTopic&&oldTopic!==b.topic&&wasDone)afterBlockDone(oldTopic,false);
+   if(b.topic&&b.done!==wasDone)afterBlockDone(b.topic,b.done);
+   else if(b.topic&&b.done&&oldTopic!==b.topic)afterBlockDone(b.topic,true);
+  }
+  const m=$('.modal');m&&m.remove();rerender()}
+ else if(k==='pair'){
+  const id=fd.pid,od=id.split('|')[0],bp=basePairs(od).find(x=>x.id===id);if(!bp)return;
+  const s0=toMin(fd.start),e0=toMin(fd.end);
+  if(!(e0>s0)){toast('Конец должен быть позже начала.');return}
+  const sn=snap(),o={s:s0,e:e0,name:fd.name,room:fd.room,note:(fd.note||'').trim()};
+  if(fd.date!==od)o.date=fd.date;
+  const same=s0===bp.s&&e0===bp.e&&fd.name===bp.name&&(fd.room||'')===(bp.room||'')&&!o.note&&!o.date;
+  if(same)delete S.pairOv[id];else S.pairOv[id]=o;
+  save();const m=$('.modal');m&&m.remove();rerender();undoToast('Пара сохранена',sn)}
+ else if(k==='work'){
+  const d=fd.wdate,s0=toMin(fd.start||'00:00'),e0=toMin(fd.end||'00:00'),sn=snap();
+  if(fd.off){S.workOv[d]={off:true}}
+  else{
+   if(!(e0>s0)){toast('Конец должен быть позже начала.');return}
+   if(fd.all){S.workDef={s:s0,e:e0};Object.keys(S.workOv).forEach(x=>{if(!S.workOv[x].off)delete S.workOv[x]})}
+   else S.workOv[d]={s:s0,e:e0};
+  }
+  save();const m=$('.modal');m&&m.remove();rerender();undoToast('Работа сохранена',sn)}
 });
 let downOnOverlay=false;
 document.addEventListener('mousedown',e=>{downOnOverlay=e.target.classList.contains('modal')});
@@ -846,7 +972,7 @@ function planSlots(date){
 function rebuildPlan(){
  const from=todayS(),nowD=new Date(),nowMin=nowD.getHours()*60+nowD.getMinutes();
  // выполненные блоки и прошлые дни остаются, все невыполненные с сегодняшнего дня заменяются
- S.blocks=S.blocks.filter(b=>b.done||b.date<from||b.manual);
+ S.blocks=S.blocks.filter(b=>b.done||b.date<from||b.manual||!isGo(b));
  const queue=[];
  TOPICS.forEach(t=>{const st=topicStatus(t.id);if(st==='done')return;
   const have=S.blocks.filter(b=>b.topic===t.id&&(b.done||b.manual)).length; // уже сделанные блоки темы не планируем заново
@@ -882,7 +1008,7 @@ function vStats(){
  const days14=lastN(14),days7=lastN(7);
  const timerS=S.sessions.filter(x=>x.mode==='timer');
  const blockMin=timerS.map(x=>x.min),avgBlock=blockMin.length?blockMin.reduce((a,b)=>a+b,0)/blockMin.length:0;
- const calDone=S.blocks.filter(b=>b.done).length,calAll=S.blocks.length;
+ const calDone=S.blocks.filter(b=>b.done&&isGo(b)).length,calAll=S.blocks.filter(isGo).length;
  const doneT=TOPICS.filter(x=>topicStatus(x.id)==='done').length;
  const rev=S.reviews,revDone=rev.filter(r=>r.done).length;
  const V=T.visits,vTotal=V.length,vAvg=vTotal?V.reduce((a,v)=>a+v.sec,0)/vTotal:0,vMax=vTotal?Math.max(...V.map(v=>v.sec)):0;

@@ -436,3 +436,14 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 .blkinfo.soft{background:var(--accsoft);border-left:4px solid var(--warn)}
 .moveq{margin:8px 0 2px;gap:4px}
 @media (max-width:900px){.calwrap{overflow-x:auto}.calgrid{grid-template-columns:44px repeat(7,minmax(112px,1fr))}.dayh{top:0}}
+/* другие дела, пары и работа в календаре */
+.ev.pair,.ev.work{pointer-events:auto;cursor:pointer}
+.ev.pair:hover,.ev.work:hover{filter:brightness(.97);box-shadow:0 0 0 2px var(--acc)}
+.ev.pair.edited{border-left-style:dashed}
+.ev.go.oth{--c:#7d8a91;background:color-mix(in srgb,var(--c) 18%,var(--card));border-left-color:var(--c)}
+.ev.go.oth.cat-work{--c:#5f7385}
+.ev.go.oth.cat-study{--c:#7c6bc4}
+.ev.go.oth.cat-personal{--c:#c98a1b}
+.ev.go.oth.cat-other{--c:#7d8a91}
+.ev.go.oth.done{background:color-mix(in srgb,var(--ok) 14%,var(--card));border-left-color:var(--ok)}
+.tl.other{border-left-color:#c98a1b;background:color-mix(in srgb,#c98a1b 14%,var(--card))}
