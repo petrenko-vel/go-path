@@ -559,13 +559,16 @@ function vCalendar(){
  const jump=calMode==='week'?calDate:monthDate;
  const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b>'
   +'<input type="date" id="caljump" class="caljump" aria-label="Перейти к дате" value="'+jump+'">'
-  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm" data-act="quickadd">Быстро добавить</button><button class="btn sm pri" data-act="newblock">+ Дело</button></div>';
+  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button>'
+  +'<button class="btn sm" data-act="quickadd">Быстро добавить</button><button class="btn sm pri" data-act="newblock">+ Дело</button></div>';
  const leg='<p class="small mute legend"><span class="chip" style="background:var(--pair)">пара</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span><span class="chip">блок Go</span><span class="chip" style="background:color-mix(in srgb,#c98a1b 22%,var(--card))">другое дело</span><span class="chip ok">выполнен</span><span class="chip warn">пропущен</span> Тяни блок, чтобы перенести. Галочка в углу отмечает выполненным. Нажми на пару или работу, чтобы изменить или перенести. Нажми на пустое время, чтобы добавить дело.</p>';
- return '<h1>Календарь</h1>'+head+planInfo()+(calMode==='week'?weekView():monthView())+leg;
+ const st=planStats(),wd=calMode==='week'?[...Array(7)].map((_,i)=>addDays(mondayOf(calDate),i)):null;
+ const bar='<div class="calbar'+(st.missed||st.gap?' warn':'')+'">'+planInfo(st)+(wd?weekSummary(wd):'')+'</div>';
+ return head+bar+(calMode==='week'?weekView():monthView())+leg;
 }
 function weekSummary(days){
  const bs=S.blocks.filter(b=>days.includes(b.date)&&isGo(b)),dn=bs.filter(b=>b.done).length,mins=bs.reduce((a,b)=>a+b.dur,0);
- return '<div class="wsum"><span><b>'+bs.length+'</b> блоков на неделе</span><span><b>'+dn+'</b> выполнено</span><span>≈ <b>'+Math.round(mins/60*10)/10+'</b> ч занятий</span>'+(bs.length?'<span class="wbar">'+progressBar(dn/bs.length*100)+'</span>':'')+'</div>';
+ return '<span class="wsum"><span class="wlab">Неделя:</span> <b>'+bs.length+'</b> блоков · <b>'+dn+'</b> выполнено · ≈ <b>'+Math.round(mins/60*10)/10+'</b> ч'+(bs.length?'<span class="wbar">'+progressBar(dn/bs.length*100)+'</span>':'')+'</span>';
 }
 // видимые часы: 8–21, но шире, если на неделе есть блоки вне этого диапазона
 function calRange(days){
@@ -611,7 +614,7 @@ function weekView(){
   return '<div class="daycol'+(we?' we':'')+(d===t?' today':'')+(d<t?' past':'')+'" data-date="'+d+'" style="height:'+H+'px">'+ev+'</div>';
  });
  const heads='<div class="dayh"></div>'+days.map(d=>'<div class="dayh'+(d===t?' today':'')+(isWE(d)?' we':'')+'">'+DOW[dow(d)-1]+' '+parse(d).getDate()+'</div>').join('');
- return '<p id="calsub" hidden data-ttl="'+fmtD(days[0])+' – '+fmtD(days[6])+' · '+(par==='Ч'?'числитель':'знаменатель')+'"></p>'+weekSummary(days)+'<div class="calwrap"><div class="calgrid">'+heads+hours+cols.join('')+'</div></div>';
+ return '<p id="calsub" hidden data-ttl="'+fmtD(days[0])+' – '+fmtD(days[6])+' · '+(par==='Ч'?'числитель':'знаменатель')+'"></p><div class="calwrap"><div class="calgrid">'+heads+hours+cols.join('')+'</div></div>';
 }
 function evBox(a,b,cls,html,attrs,xs){
  if(b<=CAL0||a>=CAL1)return '';
@@ -629,6 +632,7 @@ function monthView(){
 }
 function bindCalendar(){
  const sub=$('#calsub'),ttl=$('#calttl');if(sub&&ttl)ttl.textContent=sub.dataset.ttl;
+ const nav=document.querySelector('header.top');if(nav)document.documentElement.style.setProperty('--navh',nav.offsetHeight+'px');
  document.querySelectorAll('.daycol').forEach(col=>{
   col.addEventListener('click',e=>{
    if(e.target.closest('.ev.go'))return;
@@ -713,17 +717,20 @@ function suggestSlot(){
  return {date:nextWeekday(addDays(today,1)),start:17*60+30};
 }
 // сколько блоков плана не поместилось в календарь
-function planInfo(){
+// сводка плана: сколько блоков расставлено, что пропущено и не поместилось
+function planStats(){
  const t=todayS(),open=TOPICS.filter(x=>topicStatus(x.id)!=='done'),ids=new Set(open.map(x=>x.id));
  const need=open.reduce((a,x)=>a+Math.max(0,x.blocks-S.blocks.filter(b=>b.topic===x.id&&b.done).length),0);
  const planned=S.blocks.filter(b=>!b.done&&b.date>=t&&!isMissed(b)&&ids.has(b.topic));
- const gap=Math.max(0,need-planned.length),last=planned.reduce((m,b)=>b.date>m?b.date:m,'');
- const missed=S.blocks.filter(b=>isGo(b)&&isMissed(b)).length;
+ return {planned:planned.length,last:planned.reduce((m,b)=>b.date>m?b.date:m,''),gap:Math.max(0,need-planned.length),missed:S.blocks.filter(b=>isGo(b)&&isMissed(b)).length};
+}
+function planInfo(st){
  const pl=n=>n%10===1&&n%100!==11?'блок':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'блока':'блоков';
- return '<div class="planinfo'+(gap||missed?' warn':'')+'"><div class="pi-text"><b>В плане:</b> '+planned.length+' '+pl(planned.length)+(last?' до '+fmtD(last):'')+'. '
-  +(missed?'<b>Пропущено: '+missed+'.</b> ':'')
-  +(gap?'<b>Не поместилось до '+fmtD(PLAN_END)+':</b> '+gap+' '+pl(gap)+' (≈ '+Math.round(gap*50/60)+' ч), эти темы пойдут позже.':'Весь план помещается в календарь.')+'</div>'
-  +'<div class="pi-act">'+(missed?'<button class="btn sm pri" data-act="movemissed">Перенести пропущенные</button>':'')+'<button class="btn sm ghost" data-act="rebuildplan">Перестроить план</button></div></div>';
+ return '<span class="pi-main" title="Сколько блоков плана обучения сейчас стоит в календаре"><span class="wlab">План:</span> <b>'+st.planned+'</b> '+pl(st.planned)+(st.last?' до '+fmtD(st.last):'')+'</span>'
+  +(st.missed?'<span class="pi-miss" title="Блоки, время которых прошло без отметки"><b>пропущено '+st.missed+'</b></span>':'')
+  +(st.gap?'<span class="pi-gap" title="Не поместилось до '+fmtD(PLAN_END)+', эти темы пойдут позже"><b>не влезло '+st.gap+'</b></span>':'')
+  +(st.missed?'<button class="btn sm pri" data-act="movemissed" title="Поставить пропущенные блоки в ближайшие свободные вечера">Перенести пропущенные</button>':'')
+  +'<button class="btn sm ghost" data-act="rebuildplan" title="Заново расставить будущие блоки плана. Сегодняшние, прошлые, ручные и выполненные не меняются">Перестроить план</button>';
 }
 function tryPlace(b,date,start){
  b.date=date;b.start=start;b.manual=true;save();return true;
