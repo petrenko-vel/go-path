@@ -130,7 +130,8 @@ function todayCard(){
  const t=todayS(),nowD=new Date(),now=nowD.getHours()*60+nowD.getMinutes();
  const todayBlocks=S.blocks.filter(b=>b.date===t).sort((a,b)=>a.start-b.start);
  const goTotal=todayBlocks.length,goDone=todayBlocks.filter(b=>b.done).length;
- const all=pairsOn(t).map(p=>({s:p.s,e:p.e,kind:'pair',title:p.name,sub:p.kind+(p.room?', '+p.room:'')}))
+ const wk=workOn(t);
+ const all=(wk?[{s:wk.s,e:wk.e,kind:'work',title:'Работа',sub:''}]:[]).concat(pairsOn(t).map(p=>({s:p.s,e:p.e,kind:'pair',title:p.name,sub:p.kind+(p.room?', '+p.room:'')})))
   .concat(todayBlocks.map(b=>({s:b.start,e:b.start+b.dur,kind:'go',title:b.title,id:b.id,done:b.done}))).sort((a,b)=>a.s-b.s);
  // прошедшее прячем; невыполненный блок Go не прячем, чтобы его можно было отметить
  const items=all.filter(x=>x.e>now||(x.kind==='go'&&!x.done));
@@ -139,7 +140,7 @@ function todayCard(){
   +(isWE(t)?'<div class="hempty"><div class="he-ic">🌿</div><b>Выходной</b><div class="small mute">Отдыхай. Занятия по плану только в будни.</div></div>'
    :items.length?'<div class="tline">'+items.map(x=>{const nowOn=x.s<=now&&now<x.e,late=x.kind==='go'&&!x.done&&x.e<=now;
      return '<div class="tl '+x.kind+(x.done?' done':'')+(nowOn?' now':'')+(late?' late':'')+'"><div class="tl-time">'+fmtT(x.s)+'<br><span class="small mute">'+fmtT(x.e)+'</span></div><div class="tl-body"><b>'+esc(x.title)+'</b>'
-      +'<div class="small mute">'+(nowOn?'<span class="nowbadge">идёт сейчас</span> ':'')+(late?'не отмечен · ':'')+(x.kind==='pair'?'пара · '+esc(x.sub):'блок Go')+'</div></div>'
+      +'<div class="small mute">'+(nowOn?'<span class="nowbadge">идёт сейчас</span> ':'')+(late?'не отмечен · ':'')+(x.kind==='pair'?'пара · '+esc(x.sub):x.kind==='work'?'учёба вечером':'блок Go')+'</div></div>'
       +(x.kind==='go'?'<button class="btn sm'+(x.done?' on':'')+'" data-act="bdone" data-id="'+x.id+'">'+(x.done?'Готово ✓':'Отметить')+'</button>':'')+'</div>'}).join('')+'</div>'
    :'<div class="hempty"><div class="he-ic">'+(hiddenCount?'🌙':'☕')+'</div><b>'+(hiddenCount?'На сегодня всё':'На сегодня ничего нет')+'</b>'+(hiddenCount?'<div class="small mute">Все дела на сегодня позади.</div>':'')+'</div>')
   +'<div class="row hc-act"><a class="btn sm ghost" href="#calendar">Открыть календарь</a></div></div>';
@@ -468,7 +469,8 @@ function weekView(){
  let cols=days.map(d=>{
   const we=isWE(d);let ev='';
   if(!we){
-   const ps=pairsOn(d);
+   const ps=pairsOn(d),wk=workOn(d);
+   if(wk)ev+=evBox(wk.s,wk.e,'work','<b>Работа</b>');
    if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
     ev+=evBox(a,ps[0].s,'travel','дорога');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога');
     ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'</b> '+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
@@ -510,10 +512,16 @@ function bindCalendar(){
   n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openBlock(n.dataset.bid)}});
  });
 }
-function overlapPair(date,s,e){return pairsOn(date).some(p=>s<p.e&&e>p.s)}
+const WORK_START=9*60,WORK_END=12*60; // по утрам в будни работа, учёба вечером
+function workOn(d){
+ if(isWE(d))return null;
+ const ps=pairsOn(d),e=Math.min(WORK_END,ps.length?ps[0].s-40:WORK_END);
+ return e>WORK_START?{s:WORK_START,e}:null;
+}
+function overlapPair(date,s,e){const w=workOn(date);return pairsOn(date).some(p=>s<p.e&&e>p.s)||!!(w&&s<w.e&&e>w.s)}
 function tryPlace(b,date,start){
  if(isWE(date)){toast('Выходной. Блоки на выходные не ставим.');return false}
- if(overlapPair(date,start,start+b.dur)){toast('Пересекается с парой. Выбери другое время.');return false}
+ if(overlapPair(date,start,start+b.dur)){toast('Пересекается с парой или работой. Выбери другое время.');return false}
  b.date=date;b.start=start;save();return true;
 }
 function startDrag(e,node){
@@ -657,7 +665,7 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
  'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
  'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
-const PLAN_VERSION=2; // при смене окон повышаем: план перестроится сам при следующем открытии
+const PLAN_VERSION=3; // при смене окон повышаем: план перестроится сам при следующем открытии
 const PLAN_END='2026-12-31', PLAN_SKIP=['2026-12-31']; // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
 function planSlots(date){
@@ -672,10 +680,12 @@ function planSlots(date){
 // Ставит блоки по оставшимся темам на каждый будний день, начиная с сегодняшнего вечера. Будущие невыполненные блоки заменяются.
 function rebuildPlan(){
  const from=todayS(),nowD=new Date(),nowMin=nowD.getHours()*60+nowD.getMinutes();
- S.blocks=S.blocks.filter(b=>b.done||b.date<from||(b.date===from&&b.start<=nowMin));
+ // выполненные блоки и прошлые дни остаются, все невыполненные с сегодняшнего дня заменяются
+ S.blocks=S.blocks.filter(b=>b.done||b.date<from);
  const queue=[];
  TOPICS.forEach(t=>{const st=topicStatus(t.id);if(st==='done')return;
-  for(let i=1;i<=t.blocks;i++)queue.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')})});
+  const have=S.blocks.filter(b=>b.topic===t.id&&b.done).length; // уже сделанные блоки темы не планируем заново
+  for(let i=have+1;i<=t.blocks;i++)queue.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')})});
  let d=from,placed=0;
  while(d<=PLAN_END&&queue.length){
   for(const st of planSlots(d)){
