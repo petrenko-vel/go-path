@@ -77,6 +77,7 @@ if(!S.code||typeof S.code!=='object')S.code={};
 if(!S.pairOv)S.pairOv={};if(!S.workOv)S.workOv={};
 if(!S.track||typeof S.track!=='object')S.track={days:{},hours:{},topics:{},visits:[]};
 ['days','hours','topics'].forEach(k=>{if(!S.track[k])S.track[k]={}});if(!Array.isArray(S.track.visits))S.track.visits=[];
+migrateRoadmap();
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storageOK=false;banner()}}
 function banner(){const b=$('#banner');if(b)b.hidden=storageOK}
 function toast(msg){const t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3800)}
@@ -94,6 +95,22 @@ function setStatus(id,st,opts){
  if(!(opts&&opts.fromBlocks))syncBlocksFromStatus(id,st,prev);
 }
 function isGo(b){return b.kind!=='other'}
+// карта обучения выросла (19 этапов): старые номера тем заменяются новыми во всех данных
+function migrateRoadmap(){
+ if((S.rmV||0)>=2)return;
+ const m=id=>ID_MAP[id]||id;
+ const rk=o=>{const out={};Object.keys(o||{}).forEach(k=>{out[m(k)]=o[k]});return out};
+ S.status=rk(S.status);S.doneAt=rk(S.doneAt);S.notes=rk(S.notes);S.code=rk(S.code);S.practice=rk(S.practice);
+ const pa={};Object.keys(S.practiceAt||{}).forEach(k=>{const i=k.lastIndexOf(':');pa[m(k.slice(0,i))+k.slice(i)]=S.practiceAt[k]});S.practiceAt=pa;
+ (S.blocks||[]).forEach(b=>{if(b.topic)b.topic=m(b.topic)});
+ (S.reviews||[]).forEach(r=>{if(r.topic)r.topic=m(r.topic)});
+ (S.sessions||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
+ (S.tasks||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
+ (S.links||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
+ if(S.timer&&S.timer.topic)S.timer.topic=m(S.timer.topic);
+ S.track.topics=rk(S.track.topics);
+ S.rmV=2;S.planV=0; // план по новым темам построится заново при запуске
+}
 // статус темы меняется: блоки этой темы в календаре подстраиваются
 function syncBlocksFromStatus(id,st,prev){
  const today=todayS();let changed=false;
@@ -280,7 +297,7 @@ function stageRow(st){
  const ts=TOPICS.filter(t=>t.stage===st.id),d=ts.filter(t=>topicStatus(t.id)==='done').length;
  return '<a class="item" href="#st-'+st.id+'"><span class="t"><b>Этап '+st.id+'. '+esc(st.title)+'</b><br><span class="small mute">'+d+' из '+ts.length+' тем · '+ts.reduce((a,t)=>a+t.blocks,0)+' блоков</span></span><span class="prog">'+progressBar(d/ts.length*100)+'<b class="pct">'+Math.round(d/ts.length*100)+'%</b></span></a>';
 }
-const STAGE_ICON=['🛠','🔤','🧠','✨','🧪','⚡','🌐','🗄','🚀','🧱','🎯'];
+const STAGE_ICON=['🛠','🔤','🧠','✨','🧪','⚡','🌐','🗄','🧱','🔐','🏛','🚀','📨','🔗','📡','🖥','🎯','⏱','🎓'];
 function mapStage(st,cur){
  const ts=TOPICS.filter(t=>t.stage===st.id),d=ts.filter(t=>topicStatus(t.id)==='done').length,pct=d/ts.length*100;
  const state=d===ts.length?'done':(st.id===cur?'cur':'next');
@@ -702,7 +719,7 @@ function planInfo(){
  const pl=n=>n%10===1&&n%100!==11?'блок':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'блока':'блоков';
  return '<div class="planinfo'+(gap||missed?' warn':'')+'"><div class="pi-text"><b>В плане:</b> '+planned.length+' '+pl(planned.length)+(last?' до '+fmtD(last):'')+'. '
   +(missed?'<b>Пропущено: '+missed+'.</b> ':'')
-  +(gap?'<b>Не поместилось до конца года:</b> '+gap+' '+pl(gap)+' (≈ '+Math.round(gap*50/60)+' ч), эти темы сдвинутся на январь.':'Весь план помещается в календарь.')+'</div>'
+  +(gap?'<b>Не поместилось до '+fmtD(PLAN_END)+':</b> '+gap+' '+pl(gap)+' (≈ '+Math.round(gap*50/60)+' ч), эти темы пойдут позже.':'Весь план помещается в календарь.')+'</div>'
   +'<div class="pi-act">'+(missed?'<button class="btn sm pri" data-act="movemissed">Перенести пропущенные</button>':'')+'<button class="btn sm ghost" data-act="rebuildplan">Перестроить план</button></div></div>';
 }
 function tryPlace(b,date,start){
@@ -956,8 +973,9 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
  'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
  'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
-const PLAN_VERSION=3; // при смене окон повышаем: план перестроится сам при следующем открытии
-const PLAN_END='2026-12-31', PLAN_SKIP=['2026-12-31']; // конец плана и праздничные дни
+const PLAN_VERSION=4; // при смене окон повышаем: план перестроится сам при следующем открытии
+const PLAN_END='2027-06-30'; // конец плана: карта на ~280 блоков занимает около пяти месяцев
+const PLAN_SKIP=['2026-12-31','2027-01-01','2027-01-04','2027-01-05','2027-01-06','2027-01-07','2027-01-08','2027-02-23','2027-03-08','2027-05-03','2027-05-10']; // праздники (примерно) // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
 function planSlots(date){
  if(isWE(date)||PLAN_SKIP.includes(date))return [];
@@ -1113,6 +1131,11 @@ const ICON_PATHS={
  bulb:'<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5M9 18h6M10 22h4"/>',
  check:'<path d="M20 6 9 17l-5-5"/>',
  play:'<polygon points="6 3 20 12 6 21 6 3"/>',
+ lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+ layers:'<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+ send:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+ activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+ server:'<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
  circle:'<circle cx="12" cy="12" r="8"/>',
  dotfill:'<circle cx="12" cy="12" r="6" fill="currentColor"/>',
  half:'<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
@@ -1120,7 +1143,7 @@ const ICON_PATHS={
 };
 const EMOJI_ICON={'📅':'calendar','📆':'calendar','🗓':'calendar','🎯':'target','🧠':'help','🎉':'sparkles','✨':'sparkles','🔥':'flame','🔁':'repeat','⏱':'timer','✅':'checkcircle','🧱':'grid',
  '📘':'book','📖':'bookopen','🌿':'leaf','🌱':'leaf','🌙':'moon','☕':'coffee','📚':'library','⏳':'hourglass','🔀':'refresh','🏅':'award','🛠':'terminal','🔤':'type',
- '🧪':'flask','⚡':'zap','🌐':'globe','🗄':'database','🚀':'flag','💼':'briefcase','📄':'file','🎓':'cap','🧩':'cube','🔗':'link','💡':'bulb','✓':'check','✔':'check','▶':'play',
+ '🧪':'flask','⚡':'zap','🌐':'globe','🗄':'database','🚀':'flag','🔐':'lock','🏛':'layers','📨':'send','📡':'activity','🖥':'server','💼':'briefcase','📄':'file','🎓':'cap','🧩':'cube','🔗':'link','💡':'bulb','✓':'check','✔':'check','▶':'play',
  '🟢':'dot-l1','🟡':'dot-l2','🔴':'dot-l3','○':'circle','●':'dotfill','◐':'half','↻':'redo'};
 const EMOJI_RE=new RegExp('('+Object.keys(EMOJI_ICON).join('|')+')\\uFE0F?','g');
 function makeIcon(name){
