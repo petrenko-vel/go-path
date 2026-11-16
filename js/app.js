@@ -459,7 +459,7 @@ function vSetup(){
 const HH=48,CAL0=8*60,CAL1=21*60;
 function vCalendar(){
  const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b><button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm" data-act="rebuildplan">Перестроить план</button><button class="btn sm pri" data-act="newblock">+ Блок</button></div>';
- const leg='<p class="small mute"><span class="chip" style="background:var(--pair)">пара</span><span class="chip">блок Go (тяни, чтобы перенести; нажми, чтобы изменить)</span><span class="chip warn">повторение</span> Выходные заняты отдыхом: блоки туда не ставятся.</p>';
+ const leg='<p class="small mute"><span class="chip" style="background:var(--pair)">пара</span><span class="chip">блок Go (тяни, чтобы перенести; нажми, чтобы изменить)</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span> Выходные заняты отдыхом: блоки туда не ставятся.</p>';
  return '<h1>Календарь</h1>'+head+(calMode==='week'?weekView():monthView())+leg;
 }
 function weekView(){
@@ -474,7 +474,6 @@ function weekView(){
    if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
     ev+=evBox(a,ps[0].s,'travel','дорога');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога');
     ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'</b> '+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
-   S.reviews.filter(r=>!r.done&&r.due===d).forEach((r,i)=>{ev+='<div class="ev rev" style="top:'+(i*20)+'px;height:20px;pointer-events:none">↻ '+esc((TBY[r.topic]||{title:''}).title)+'</div>'});
    S.blocks.filter(b=>b.date===d).forEach(b=>{ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':''),'<b>'+fmtT(b.start)+'</b> '+esc(b.title),' data-bid="'+b.id+'" tabindex="0" role="button"')});
   }else ev='<div style="padding:8px;color:var(--mute);font-size:13px">Выходной</div>';
   return '<div class="daycol'+(we?' we':'')+(d===t?' today':'')+'" data-date="'+d+'" style="height:'+H+'px">'+ev+'</div>';
@@ -492,8 +491,8 @@ function monthView(){
  const first=iso(new Date(y,m,1)),start=mondayOf(first),t=todayS();
  let cells='';
  for(let i=0;i<42;i++){const s=addDays(start,i);if(i>=35&&parse(s).getMonth()!==m)break;
-  const bl=S.blocks.filter(b=>b.date===s),dn=bl.filter(b=>b.done).length,rv=S.reviews.filter(r=>!r.done&&r.due===s).length;
-  cells+='<button class="mcell'+(isWE(s)?' we':'')+(parse(s).getMonth()!==m?' out':'')+(s===t?' today':'')+'" data-act="gotoweek" data-date="'+s+'" aria-label="'+fmtD(s)+'"><b>'+parse(s).getDate()+'</b>'+(dow(s)===1?' <span class="small mute">'+parity(s)+'</span>':'')+(bl.length?'<br><span class="chip">Go '+dn+'/'+bl.length+'</span>':'')+(rv?'<br><span class="chip warn">↻ '+rv+'</span>':'')+'</button>';}
+  const bl=S.blocks.filter(b=>b.date===s),dn=bl.filter(b=>b.done).length;
+  cells+='<button class="mcell'+(isWE(s)?' we':'')+(parse(s).getMonth()!==m?' out':'')+(s===t?' today':'')+'" data-act="gotoweek" data-date="'+s+'" aria-label="'+fmtD(s)+'"><b>'+parse(s).getDate()+'</b>'+(dow(s)===1?' <span class="small mute">'+parity(s)+'</span>':'')+(bl.length?'<br><span class="chip">Go '+dn+'/'+bl.length+'</span>':'')+'</button>';}
  return '<p class="small mute" id="calsub" data-ttl="'+MONN[m]+' '+y+'">Нажми на день, чтобы открыть неделю. Ч и З у понедельников — числитель и знаменатель.</p><div class="mgrid" style="margin-bottom:4px">'+DOW.map(x=>'<div class="small mute" style="text-align:center">'+x+'</div>').join('')+'</div><div class="mgrid">'+cells+'</div>';
 }
 function bindCalendar(){
