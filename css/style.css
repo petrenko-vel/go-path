@@ -378,3 +378,47 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 /* работа по утрам */
 .ev.work{background:color-mix(in srgb,var(--mute) 16%,var(--card));border-left:4px solid var(--mute);color:var(--ink);pointer-events:none}
 .tl.work{border-left-color:var(--mute);background:color-mix(in srgb,var(--mute) 14%,var(--card))}
+/* сводка плана в календаре */
+.planinfo{border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;background:var(--card);padding:8px 12px;margin:8px 0;font-size:14px}
+.planinfo.warn{border-left-color:var(--warn);background:var(--warnsoft)}
+/* календарь: прокрутка внутри, закреплённые шапка и часы */
+.calwrap{overflow:auto;max-height:max(420px,calc(100vh - 250px));position:relative}
+.calgrid{grid-template-columns:44px repeat(5,minmax(118px,1fr)) 52px 52px}
+.hours{position:sticky;left:0;z-index:5;background:var(--card)}
+.hours div{height:56px}
+.daycol{background-size:100% 56px}
+.dayh:first-child{position:sticky;left:0;z-index:6}
+.daycol.past:not(.today){background-color:color-mix(in srgb,var(--mute) 7%,transparent)}
+.daycol.we .wev{writing-mode:vertical-rl;margin:14px auto;color:var(--mute);font-size:13px}
+.caljump{width:auto;min-height:32px;padding:3px 8px;font-size:14px}
+.legend{margin:8px 0}
+.legend .chip{margin:0 4px 0 0}
+/* блоки */
+.ev.go{touch-action:manipulation;padding-right:24px}
+.ev.go.done{opacity:1;text-decoration:none;background:color-mix(in srgb,var(--ok) 14%,var(--card));border-left-color:var(--ok)}
+.ev.go.missed{background:var(--warnsoft);border-left:4px dashed var(--warn)}
+.bchk{position:absolute;top:3px;right:3px;width:18px;height:18px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--card);color:var(--mute);cursor:pointer;display:grid;place-items:center;font-size:11px;line-height:1;opacity:.55}
+.ev.go:hover .bchk,.bchk:focus-visible{opacity:1}
+.bchk:hover{border-color:var(--ok);color:var(--ok)}
+.ev.go.done .bchk{background:var(--ok);border-color:var(--ok);color:#fff;opacity:1}
+.ev .pno{font-size:11px;color:var(--mute);font-weight:400}
+.ev.pair,.ev.work,.ev.travel{font-size:12px}
+.nowline{position:absolute;left:0;right:0;height:2px;background:var(--bad);z-index:7;pointer-events:none}
+.nowline i{position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.dropghost{position:absolute;left:3px;right:3px;z-index:8;pointer-events:none;border:2px dashed var(--acc);background:color-mix(in srgb,var(--acc) 15%,transparent);border-radius:7px;padding:2px 5px;font-size:12px;overflow:hidden}
+.dropghost.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+/* сводка недели и плана */
+.wsum{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:14px;margin:6px 0}
+.wsum .wbar{flex:1;min-width:120px;max-width:260px}
+.planinfo{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
+.pi-text{flex:1;min-width:220px}
+.pi-act{display:flex;gap:6px;flex-wrap:wrap}
+/* окно блока */
+.durq{margin-top:6px}
+.blkinfo{margin:8px 0;padding:6px 10px;border-radius:8px;font-size:14px}
+.blkinfo.ok{background:var(--oksoft);color:var(--ink)}
+.blkinfo.bad{background:var(--warnsoft);border-left:4px solid var(--bad)}
+.toast.act{display:flex;gap:12px;align-items:center}
+.toast.act .btn{min-height:28px;color:var(--ink)}
+@media (max-width:600px){.calgrid{grid-template-columns:40px repeat(5,minmax(104px,1fr)) 40px 40px}.wsum{font-size:13px}}
+@media (max-width:520px){.caljump{display:none}.cal-head{gap:6px}.planinfo{font-size:13px;padding:6px 10px}.pi-text{min-width:0}.wsum{gap:4px 12px}}

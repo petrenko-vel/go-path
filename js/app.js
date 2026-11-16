@@ -109,16 +109,19 @@ function parseHash(){
  else if(h.startsWith('st-')){route='stage';param=h.slice(3)}
  else{route=['home','map','calendar','tasks','materials','stats','setup'].includes(h)?h:'home';param=''}
 }
+function rerender(){const y=scrollY;render();scrollTo(0,y)}
 function render(){
  parseHash();
  document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage')&&k==='map')a.setAttribute('aria-current','page')});
  const m=$('#main');
  const fn={home:vHome,map:vMap,stage:vStage,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
+ const cw=route==='calendar'?m.querySelector('.calwrap'):null;if(cw){calScroll=cw.scrollTop;calScrollX=cw.scrollLeft}
  m.className='wrap'+(route==='topic'?' wide':'');
  m.innerHTML=fn();
  if(route==='calendar')bindCalendar();
  if(route==='materials')applyMatFilter();
  if(route==='topic')updateGutter();
+ if(route!=='calendar')calScroll=null;
  window.scrollTo(0,0);
  renderTimer();
 }
@@ -452,34 +455,75 @@ function vSetup(){
  return '<h1>Данные и настройки</h1>'
  +'<div class="card"><h3>Тема оформления</h3><div class="row">'+[['auto','Как в системе'],['light','Светлая'],['dark','Тёмная']].map(x=>'<button class="btn sm'+(S.theme===x[0]?' on':'')+'" data-act="theme" data-v="'+x[0]+'">'+x[1]+'</button>').join('')+'</div></div>'
  +'<div class="card"><h3>Расписание пар</h3><p class="small">Взято из твоей Google-таблицы. Числитель с понедельника 14.09.2026, недели чередуются. Сейчас: <b>'+(parity(todayS())==='Ч'?'числитель':'знаменатель')+'</b>. Если пары изменятся, скажи мне в чате, я обновлю сайт.</p></div>'
+ +'<div class="card"><h3>Резервная копия</h3><p class="small mute">Прогресс, календарь и статистика хранятся только в этом браузере: очистка данных сайта сотрёт всё. Сохрани файл и при необходимости загрузи его обратно.'+(S.lastBackup?' Последняя копия: '+fmtD(S.lastBackup)+'.':' Копий ещё не было.')+'</p><div class="row"><button class="btn pri" data-act="dlbackup">Скачать копию</button><label class="btn" tabindex="0">Загрузить из файла<input type="file" id="impf" accept=".json,application/json" hidden></label></div></div>'
  +'<div class="card"><h3>Сброс</h3><p><button class="btn danger" data-act="reset">Стереть всё</button></p></div>';
 }
 
 // ---------- календарь ----------
-const HH=48,CAL0=8*60,CAL1=21*60;
+const HH=56,CAL0=8*60,CAL1=21*60;
+let calScroll=null,calScrollX=0; // положение прокрутки сетки календаря (null: выставить автоматически)
+const PAIR_NO={'11:10':3,'12:40':4,'14:10':5,'15:40':6,'17:10':7};
+function isMissed(b){const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),t=todayS();return !b.done&&(b.date<t||(b.date===t&&b.start+b.dur<=nm))}
+function snap(){return JSON.stringify(S.blocks)}
+// сообщение с кнопкой «Отменить»: возвращает блоки к снимку
+function undoToast(msg,snapshot){
+ document.querySelectorAll('.toast').forEach(x=>x.remove());
+ const t=document.createElement('div');t.className='toast act';t.setAttribute('role','status');
+ const sp=document.createElement('span');sp.textContent=msg;
+ const bt=document.createElement('button');bt.type='button';bt.className='btn sm';bt.textContent='Отменить';
+ bt.onclick=()=>{S.blocks=JSON.parse(snapshot);save();t.remove();rerender()};
+ t.appendChild(sp);t.appendChild(bt);document.body.appendChild(t);setTimeout(()=>t.remove(),9000);
+}
+function updateBlkInfo(){
+ const f=document.querySelector('form[data-form=block]'),el=$('#blkinfo');if(!f||!el)return;
+ if(!f.start.value||!f.date.value){el.textContent='';return}
+ const start=toMin(f.start.value),dur=Math.max(15,+f.dur.value||50),end=start+dur;
+ const msg=f.done.checked?'':conflictMsg(f.date.value,start,end,f.id.value||undefined);
+ el.className='blkinfo '+(msg?'bad':'ok');
+ el.textContent=fmtT(start)+'–'+fmtT(end)+'. '+(msg||'Время свободно.');
+}
+function updateNowLine(){
+ const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),l=document.querySelector('.nowline');
+ if(l&&nm>=CAL0&&nm<=CAL1)l.style.top=(nm-CAL0)/60*HH+'px';
+}
 function vCalendar(){
- const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b><button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm" data-act="rebuildplan">Перестроить план</button><button class="btn sm pri" data-act="newblock">+ Блок</button></div>';
- const leg='<p class="small mute"><span class="chip" style="background:var(--pair)">пара</span><span class="chip">блок Go (тяни, чтобы перенести; нажми, чтобы изменить)</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span> Выходные заняты отдыхом: блоки туда не ставятся.</p>';
- return '<h1>Календарь</h1>'+head+(calMode==='week'?weekView():monthView())+leg;
+ const jump=calMode==='week'?calDate:monthDate;
+ const head='<div class="cal-head"><button class="btn sm" data-act="calprev" aria-label="Назад">←</button><button class="btn sm" data-act="caltoday">Сегодня</button><button class="btn sm" data-act="calnext" aria-label="Вперёд">→</button><b class="sp" id="calttl"></b>'
+  +'<input type="date" id="caljump" class="caljump" aria-label="Перейти к дате" value="'+jump+'">'
+  +'<button class="btn sm'+(calMode==='week'?' on':'')+'" data-act="calmode" data-v="week">Неделя</button><button class="btn sm'+(calMode==='month'?' on':'')+'" data-act="calmode" data-v="month">Месяц</button><button class="btn sm pri" data-act="newblock">+ Блок</button></div>';
+ const leg='<p class="small mute legend"><span class="chip" style="background:var(--pair)">пара</span><span class="chip" style="background:color-mix(in srgb,var(--mute) 16%,var(--card))">работа</span><span class="chip">блок Go</span><span class="chip ok">выполнен</span><span class="chip warn">пропущен</span> Тяни блок, чтобы перенести. Галочка в углу отмечает выполненным. Нажми на пустое время, чтобы добавить блок.</p>';
+ return '<h1>Календарь</h1>'+head+planInfo()+(calMode==='week'?weekView():monthView())+leg;
+}
+function weekSummary(days){
+ const bs=S.blocks.filter(b=>days.includes(b.date)),dn=bs.filter(b=>b.done).length,mins=bs.reduce((a,b)=>a+b.dur,0);
+ return '<div class="wsum"><span><b>'+bs.length+'</b> блоков на неделе</span><span><b>'+dn+'</b> выполнено</span><span>≈ <b>'+Math.round(mins/60*10)/10+'</b> ч занятий</span>'+(bs.length?'<span class="wbar">'+progressBar(dn/bs.length*100)+'</span>':'')+'</div>';
 }
 function weekView(){
  const mon=mondayOf(calDate),days=[...Array(7)].map((_,i)=>addDays(mon,i)),t=todayS();
- const par=parity(mon),H=(CAL1-CAL0)/60*HH;
- let hours='<div class="hours" style="padding-top:0">'+[...Array((CAL1-CAL0)/60)].map((_,i)=>'<div>'+pad(CAL0/60+i)+':00</div>').join('')+'</div>';
+ const par=parity(mon),H=(CAL1-CAL0)/60*HH,nd=new Date(),nm=nd.getHours()*60+nd.getMinutes();
+ let hours='<div class="hours">'+[...Array((CAL1-CAL0)/60)].map((_,i)=>'<div>'+pad(CAL0/60+i)+':00</div>').join('')+'</div>';
  let cols=days.map(d=>{
   const we=isWE(d);let ev='';
   if(!we){
    const ps=pairsOn(d),wk=workOn(d);
-   if(wk)ev+=evBox(wk.s,wk.e,'work','<b>Работа</b>');
+   if(wk)ev+=evBox(wk.s,wk.e,'work','<b>Работа</b> '+fmtT(wk.s)+'–'+fmtT(wk.e));
    if(ps.length){const a=ps[0].s-40,b=ps[ps.length-1].e+25;
-    ev+=evBox(a,ps[0].s,'travel','дорога');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога');
-    ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'</b> '+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
-   S.blocks.filter(b=>b.date===d).forEach(b=>{ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':''),'<b>'+fmtT(b.start)+'</b> '+esc(b.title),' data-bid="'+b.id+'" tabindex="0" role="button"')});
-  }else ev='<div style="padding:8px;color:var(--mute);font-size:13px">Выходной</div>';
-  return '<div class="daycol'+(we?' we':'')+(d===t?' today':'')+'" data-date="'+d+'" style="height:'+H+'px">'+ev+'</div>';
+    ev+=evBox(a,ps[0].s,'travel','дорога · 40 мин');ev+=evBox(ps[ps.length-1].e,b,'travel','дорога · 25 мин');
+    ps.forEach(p=>ev+=evBox(p.s,p.e,'pair','<b>'+fmtT(p.s)+'–'+fmtT(p.e)+'</b>'+(PAIR_NO[fmtT(p.s)]?' <span class="pno">'+PAIR_NO[fmtT(p.s)]+' пара</span>':'')+'<br>'+esc(p.name)+' ('+p.kind+(p.room?', '+esc(p.room):'')+')'))}
+   S.blocks.filter(b=>b.date===d).forEach(b=>{
+    const miss=isMissed(b),stt=b.done?'выполнен':miss?'пропущен':'запланирован';
+    const ttl=fmtT(b.start)+'–'+fmtT(b.start+b.dur)+' · '+b.title+' ('+stt+')';
+    const chk=b.done?'Снять отметку о выполнении':'Отметить выполненным';
+    ev+=evBox(b.start,b.start+b.dur,'go'+(b.done?' done':'')+(miss?' missed':''),
+     '<button class="bchk" type="button" data-act="bdone" data-id="'+b.id+'" aria-label="'+chk+'" title="'+chk+'">✓</button><b>'+fmtT(b.start)+'</b> '+esc(b.title),
+     ' data-bid="'+b.id+'" tabindex="0" role="button" title="'+esc(ttl)+'" aria-label="'+esc(ttl)+'"');
+   });
+   if(d===t&&nm>=CAL0&&nm<=CAL1)ev+='<div class="nowline" style="top:'+(nm-CAL0)/60*HH+'px"><i></i></div>';
+  }else ev='<div class="wev">Выходной</div>';
+  return '<div class="daycol'+(we?' we':'')+(d===t?' today':'')+(d<t?' past':'')+'" data-date="'+d+'" style="height:'+H+'px">'+ev+'</div>';
  });
  const heads='<div class="dayh"></div>'+days.map(d=>'<div class="dayh'+(d===t?' today':'')+(isWE(d)?' we':'')+'">'+DOW[dow(d)-1]+' '+parse(d).getDate()+'</div>').join('');
- return '<p class="small mute" id="calsub" data-ttl="'+fmtD(days[0])+' – '+fmtD(days[6])+' · '+(par==='Ч'?'числитель':'знаменатель')+'">'+(par==='Ч'?'Числитель':'Знаменатель')+'</p><div class="calwrap"><div class="calgrid">'+heads+hours+cols.join('')+'</div></div>';
+ return '<p id="calsub" hidden data-ttl="'+fmtD(days[0])+' – '+fmtD(days[6])+' · '+(par==='Ч'?'числитель':'знаменатель')+'"></p>'+weekSummary(days)+'<div class="calwrap"><div class="calgrid">'+heads+hours+cols.join('')+'</div></div>';
 }
 function evBox(a,b,cls,html,attrs){
  if(b<=CAL0||a>=CAL1)return '';
@@ -503,13 +547,26 @@ function bindCalendar(){
    if(col.classList.contains('we')){toast('Выходной. Блоки на выходные не ставим.');return}
    const y=e.clientY-col.getBoundingClientRect().top;
    const mins=Math.max(CAL0,Math.min(CAL1-50,CAL0+Math.round(y/HH*60/15)*15));
+   const why=busyReason(col.dataset.date,mins,mins+15);
+   if(why){toast('Здесь занято: '+why+'. Выбери свободное время.');return}
    openBlock(null,{date:col.dataset.date,start:mins});
   });
  });
+ let touchTap=null; // на телефоне блок не перетаскивают (мешает прокрутке): касание открывает окно блока
  document.querySelectorAll('.ev.go').forEach(n=>{
-  n.addEventListener('pointerdown',e=>startDrag(e,n));
+  n.addEventListener('pointerdown',e=>{if(e.target.closest('.bchk'))return;if(e.pointerType==='touch'){touchTap=n.dataset.bid;return}startDrag(e,n)});
+  n.addEventListener('click',e=>{if(e.target.closest('.bchk'))return;if(touchTap===n.dataset.bid){touchTap=null;openBlock(n.dataset.bid)}});
   n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openBlock(n.dataset.bid)}});
  });
+ const w=$('.calwrap');
+ if(w){
+  if(calScroll===null){
+   const nd=new Date(),nm=nd.getHours()*60+nd.getMinutes(),tc=w.querySelector('.daycol.today');
+   const focus=tc?Math.max(nm,16*60):16*60; // вечер важнее: там учёба
+   w.scrollTop=Math.max(0,(focus-CAL0)/60*HH-60);
+   if(tc&&w.scrollWidth>w.clientWidth)w.scrollLeft=Math.max(0,tc.offsetLeft-50);
+  }else{w.scrollTop=calScroll;w.scrollLeft=calScrollX}
+ }
 }
 const WORK_START=9*60,WORK_END=12*60; // по утрам в будни работа, учёба вечером
 function workOn(d){
@@ -517,40 +574,111 @@ function workOn(d){
  const ps=pairsOn(d),e=Math.min(WORK_END,ps.length?ps[0].s-40:WORK_END);
  return e>WORK_START?{s:WORK_START,e}:null;
 }
-function overlapPair(date,s,e){const w=workOn(date);return pairsOn(date).some(p=>s<p.e&&e>p.s)||!!(w&&s<w.e&&e>w.s)}
+// почему время занято: работа, пара или дорога (пустая строка, если свободно)
+function busyReason(date,s,e){
+ if(isWE(date))return 'выходной';
+ const w=workOn(date);if(w&&s<w.e&&e>w.s)return 'работа';
+ const ps=pairsOn(date);
+ for(const p of ps)if(s<p.e&&e>p.s)return 'пара «'+p.name+'»';
+ if(ps.length){
+  const a=ps[0].s-40,z=ps[ps.length-1].e+25;
+  if(s<ps[0].s&&e>a)return 'дорога на пары';
+  if(e>ps[ps.length-1].e&&s<z)return 'дорога с пар';
+ }
+ return '';
+}
+function overlapPair(date,s,e){return !!busyReason(date,s,e)}
+function goConflict(date,s,e,ignoreId){
+ // блоки из автоплана гибкие: они сами сдвинутся, поэтому конфликтуют только ручные и выполненные
+ const c=S.blocks.find(b=>b.id!==ignoreId&&(b.manual||b.done)&&b.date===date&&s<b.start+b.dur&&e>b.start);
+ return c?'блоком «'+c.title+'» ('+fmtT(c.start)+')':'';
+}
+// полное сообщение о конфликте или пустая строка
+function conflictMsg(date,s,e,ignoreId){
+ if(isWE(date))return 'Выходной. Блоки на выходные не ставим.';
+ if(s<CAL0||e>CAL1)return 'Блок должен целиком укладываться в '+fmtT(CAL0)+'–'+fmtT(CAL1)+'.';
+ const r=busyReason(date,s,e);if(r)return 'В это время занято: '+r+'. Выбери другое время.';
+ const g=goConflict(date,s,e,ignoreId);if(g)return 'Пересекается с '+g+'. Выбери другое время.';
+ return '';
+}
+// ближайшее свободное вечернее окно для нового блока
+function suggestSlot(){
+ const nowD=new Date(),nm=nowD.getHours()*60+nowD.getMinutes(),today=todayS();
+ let d=today;
+ for(let i=0;i<60;i++,d=addDays(d,1)){
+  if(isWE(d))continue;
+  for(const w of (GO_WIN[parity(d)][dow(d)]||[])){
+   const [a,b]=w.split('-').map(toMin);
+   for(let st=a;st+BLOCK_MIN<=b;st+=BLOCK_STEP){
+    if(d===today&&st<=nm)continue;
+    if(!conflictMsg(d,st,st+BLOCK_MIN))return {date:d,start:st};
+   }
+  }
+ }
+ return {date:nextWeekday(today),start:17*60+30};
+}
+// сколько блоков плана не поместилось в календарь
+function planInfo(){
+ const t=todayS(),open=TOPICS.filter(x=>topicStatus(x.id)!=='done'),ids=new Set(open.map(x=>x.id));
+ const need=open.reduce((a,x)=>a+Math.max(0,x.blocks-S.blocks.filter(b=>b.topic===x.id&&b.done).length),0);
+ const planned=S.blocks.filter(b=>!b.done&&b.date>=t&&!isMissed(b)&&ids.has(b.topic));
+ const gap=Math.max(0,need-planned.length),last=planned.reduce((m,b)=>b.date>m?b.date:m,'');
+ const missed=S.blocks.filter(isMissed).length;
+ const pl=n=>n%10===1&&n%100!==11?'блок':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'блока':'блоков';
+ return '<div class="planinfo'+(gap||missed?' warn':'')+'"><div class="pi-text"><b>В плане:</b> '+planned.length+' '+pl(planned.length)+(last?' до '+fmtD(last):'')+'. '
+  +(missed?'<b>Пропущено: '+missed+'.</b> ':'')
+  +(gap?'<b>Не поместилось до конца года:</b> '+gap+' '+pl(gap)+' (≈ '+Math.round(gap*50/60)+' ч), эти темы сдвинутся на январь.':'Весь план помещается в календарь.')+'</div>'
+  +'<div class="pi-act">'+(missed?'<button class="btn sm pri" data-act="movemissed">Перенести пропущенные</button>':'')+'<button class="btn sm ghost" data-act="rebuildplan">Перестроить план</button></div></div>';
+}
 function tryPlace(b,date,start){
- if(isWE(date)){toast('Выходной. Блоки на выходные не ставим.');return false}
- if(overlapPair(date,start,start+b.dur)){toast('Пересекается с парой или работой. Выбери другое время.');return false}
- b.date=date;b.start=start;save();return true;
+ const msg=conflictMsg(date,start,start+b.dur,b.id);
+ if(msg){toast(msg);return false}
+ b.date=date;b.start=start;b.manual=true;save();rebuildPlan();return true;
 }
 function startDrag(e,node){
  if(e.button!==undefined&&e.button!==0)return;
  const b=S.blocks.find(x=>x.id===node.dataset.bid);if(!b)return;
- const sx=e.clientX,sy=e.clientY,r0=node.getBoundingClientRect();let moved=false;
+ const sx=e.clientX,sy=e.clientY,r0=node.getBoundingClientRect();let moved=false,ghost=null;
  node.setPointerCapture(e.pointerId);
- const mv=ev=>{const dx=ev.clientX-sx,dy=ev.clientY-sy;if(!moved&&Math.abs(dx)+Math.abs(dy)<6)return;moved=true;node.classList.add('drag');node.style.transform='translate('+dx+'px,'+dy+'px)'};
+ const target=ev=>{
+  const col=[...document.querySelectorAll('.daycol')].find(c=>{const r=c.getBoundingClientRect();return ev.clientX>=r.left&&ev.clientX<r.right});
+  if(!col)return null;
+  let mins=CAL0+Math.round(((r0.top+(ev.clientY-sy)-col.getBoundingClientRect().top)/HH*60)/15)*15;
+  mins=Math.max(CAL0,Math.min(CAL1-b.dur,mins));
+  return {col,mins};
+ };
+ const clearGhost=()=>{if(ghost){ghost.remove();ghost=null}};
+ const mv=ev=>{
+  const dx=ev.clientX-sx,dy=ev.clientY-sy;
+  if(!moved&&Math.abs(dx)+Math.abs(dy)<6)return;
+  moved=true;node.classList.add('drag');node.style.transform='translate('+dx+'px,'+dy+'px)';
+  clearGhost();const t=target(ev);if(!t)return;
+  const msg=conflictMsg(t.col.dataset.date,t.mins,t.mins+b.dur,b.id);
+  ghost=document.createElement('div');ghost.className='dropghost'+(msg?' bad':'');
+  ghost.style.top=(t.mins-CAL0)/60*HH+'px';ghost.style.height=(b.dur/60*HH-2)+'px';
+  ghost.innerHTML='<b>'+fmtT(t.mins)+'–'+fmtT(t.mins+b.dur)+'</b>'+(msg?'<br><small>'+esc(msg.replace(' Выбери другое время.',''))+'</small>':'');
+  t.col.appendChild(ghost);
+ };
  const up=ev=>{
   node.removeEventListener('pointermove',mv);node.removeEventListener('pointerup',up);node.removeEventListener('pointercancel',up);
   try{node.releasePointerCapture(ev.pointerId)}catch(_){}
+  clearGhost();
   if(!moved){openBlock(b.id);return}
-  const cols=[...document.querySelectorAll('.daycol')];
-  const col=cols.find(c=>{const r=c.getBoundingClientRect();return ev.clientX>=r.left&&ev.clientX<r.right});
-  if(!col){render();return}
-  const colTop=col.getBoundingClientRect().top;
-  let mins=CAL0+Math.round(((r0.top+(ev.clientY-sy)-colTop)/HH*60)/15)*15;
-  mins=Math.max(CAL0,Math.min(CAL1-b.dur,mins));
-  tryPlace(b,col.dataset.date,mins);
-  render();
+  const t=target(ev);
+  if(!t){rerender();return}
+  const sn=snap(),ok=tryPlace(b,t.col.dataset.date,t.mins);
+  rerender();if(ok)undoToast('Блок перенесён',sn);
  };
  node.addEventListener('pointermove',mv);node.addEventListener('pointerup',up);node.addEventListener('pointercancel',up);
 }
 function openBlock(id,pre){
  const b=id?S.blocks.find(x=>x.id===id):null;
  const nt=nextTopic();
- const v=b||Object.assign({title:nt?'Go: '+nt.title:'Go',topic:nt?nt.id:'',date:nextWeekday(todayS()),start:9*60+30,dur:50,done:false},pre||{});
+ const slot=suggestSlot();
+ const v=b||Object.assign({title:nt?'Go: '+nt.title:'Go',topic:nt?nt.id:'',date:slot.date,start:slot.start,dur:50,done:false},pre||{});
  const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
- m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Блок':'Новый блок')+'</h3><label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select><div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required step="900" value="'+fmtT(v.start)+'"></div></div><label>Длительность, мин</label><input type="number" name="dur" min="15" max="180" step="5" value="'+v.dur+'"><label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнен</label><input type="hidden" name="id" value="'+(b?b.id:'')+'"><p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
- document.body.appendChild(m);const f=m.querySelector('input[name=title]');f&&f.focus();
+ m.innerHTML='<form class="box" data-form="block"><h3>'+(b?'Блок':'Новый блок')+'</h3><label>Название</label><input type="text" name="title" required value="'+esc(v.title)+'"><label>Тема</label><select name="topic">'+topicOptions(v.topic)+'</select><div class="row"><div><label>Дата</label><input type="date" name="date" required value="'+v.date+'"></div><div><label>Начало</label><input type="time" name="start" required min="08:00" max="20:45" step="300" value="'+fmtT(v.start)+'"></div></div><label>Длительность, мин</label><input type="number" name="dur" min="15" max="180" step="5" value="'+v.dur+'"><div class="row durq">'+[30,45,50,60,90].map(n=>'<button class="btn sm" type="button" data-act="setdur" data-v="'+n+'">'+n+'</button>').join('')+'</div><div class="blkinfo" id="blkinfo"></div><label><input type="checkbox" name="done"'+(v.done?' checked':'')+'> Выполнен</label><input type="hidden" name="id" value="'+(b?b.id:'')+'"><p class="row"><button class="btn pri" type="submit">Сохранить</button><button class="btn" type="button" data-act="closemodal">Отмена</button>'+(b?'<span class="sp"></span><button class="btn danger" type="button" data-act="delblock" data-id="'+b.id+'">Удалить</button>':'')+'</p></form>';
+ document.body.appendChild(m);updateBlkInfo();const f=m.querySelector('input[name=title]');f&&f.focus();
 }
 
 // ---------- таймер ----------
@@ -589,9 +717,15 @@ document.addEventListener('click',e=>{
  if(['tgo','treset','tmode'].includes(a)){timerAct(a,el);return}
  if(a==='status'){const y=scrollY;setStatus(id,el.dataset.st);render();if(route==='stage')scrollTo(0,y)}
  else if(a==='opennote'){topicTab='note';if(el.dataset.st)setStatus(id,el.dataset.st)}
+ else if(a==='dlbackup'){
+  const blob=new Blob([JSON.stringify(S,null,1)],{type:'application/json'}),u=URL.createObjectURL(blob),l=document.createElement('a');
+  l.href=u;l.download='go-path-backup-'+todayS()+'.json';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);
+  S.lastBackup=todayS();save();toast('Копия сохранена в папку загрузок');render()}
  else if(a==='runcode'){runCode()}
  else if(a==='resetcode'){const id=$('#term').dataset.id;delete S.code[id];save();const ta=$('#codeed');ta.value=starterCode(TBY[id]);updateGutter();$('#termout').textContent='';const st=$('#termstatus');st.className='term-st';st.textContent='Код сброшен к примеру из конспекта'}
  else if(a==='termtoggle'){S.termHide=!S.termHide;save();const y=scrollY;render();scrollTo(0,y)}
+ else if(a==='setdur'){const f=document.querySelector('form[data-form=block]');if(f){f.dur.value=el.dataset.v;updateBlkInfo()}}
+ else if(a==='movemissed'){const sn=snap();S.blocks=S.blocks.filter(x=>!isMissed(x));rebuildPlan();rerender();undoToast('Пропущенные блоки перенесены на ближайшие вечера',sn)}
  else if(a==='mfilter'){const y=scrollY;if(el.dataset.k==='type')matType=el.dataset.v;else matLang=el.dataset.v;render();scrollTo(0,y)}
  else if(a==='newq'){qShift++;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='mreset'){matType='all';matLang='all';matStage='all';matQ='';render()}
@@ -599,19 +733,23 @@ document.addEventListener('click',e=>{
  else if(a==='tab'){topicTab=el.dataset.tab;render()}
  else if(a==='plan'){openBlock(null,{title:'Go: '+TBY[id].title,topic:id})}
  else if(a==='revdone'){const r=S.reviews.find(x=>x.id===id);if(r){r.done=true;r.doneAt=todayS();save();render()}}
- else if(a==='bdone'){const b=S.blocks.find(x=>x.id===id);if(b){b.done=!b.done;save();render()}}
+ else if(a==='bdone'){const b=S.blocks.find(x=>x.id===id);if(b){b.done=!b.done;save();rerender()}}
  else if(a==='openpractice'){topicTab='task'}
  else if(a==='tfilter'){taskFilter=el.dataset.v;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='ptoggle'){const i=el.dataset.i,pr=S.practice[id]=S.practice[id]||{};
   if(el.checked){pr[i]=true;S.practiceAt[id+':'+i]=todayS()}else{delete pr[i];delete S.practiceAt[id+':'+i]}
   save();const y=scrollY;render();scrollTo(0,y)}
  else if(a==='closemodal'){const m=$('.modal');m&&m.remove()}
- else if(a==='delblock'){S.blocks=S.blocks.filter(x=>x.id!==id);save();const m=$('.modal');m&&m.remove();render()}
+ else if(a==='delblock'){const sn=snap();S.blocks=S.blocks.filter(x=>x.id!==id);save();const m=$('.modal');m&&m.remove();rerender();undoToast('Блок удалён',sn)}
  else if(a==='newblock'){openBlock(null,{})}
- else if(a==='rebuildplan'){if(confirm('Заменить все будущие невыполненные блоки новым планом по оставшимся темам?')){const r=rebuildPlan();render();toast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до 31.12: '+r.left:''))}}
+ else if(a==='rebuildplan'){if(confirm('Построить план заново по оставшимся темам? Блоки, которые ты добавила или двигала сама, и выполненные останутся на месте, остальные будущие блоки заменятся.')){const sn=snap(),r=rebuildPlan();rerender();undoToast('Поставлено блоков: '+r.placed+(r.left?'. Не влезло до конца года: '+r.left:''),sn)}}
  else if(a==='calprev'||a==='calnext'){const k=a==='calnext'?1:-1;if(calMode==='week')calDate=addDays(calDate,7*k);else{const d=parse(monthDate);d.setMonth(d.getMonth()+k,1);monthDate=iso(d)}render()}
  else if(a==='caltoday'){calDate=todayS();monthDate=todayS();render()}
- else if(a==='calmode'){calMode=el.dataset.v;if(calMode==='month')monthDate=calDate;render()}
+ else if(a==='calmode'){
+  const to=el.dataset.v;
+  if(to==='month'&&calMode!=='month')monthDate=calDate;
+  if(to==='week'&&calMode==='month'){const md=parse(monthDate),td=parse(todayS());calDate=(md.getFullYear()===td.getFullYear()&&md.getMonth()===td.getMonth())?todayS():iso(new Date(md.getFullYear(),md.getMonth(),1))}
+  calMode=to;render()}
  else if(a==='gotoweek'){calDate=el.dataset.date;calMode='week';render()}
  else if(a==='theme'){S.theme=el.dataset.v;save();applyTheme();render()}
  else if(a==='export'){$('#exp').value=JSON.stringify(S,null,1)}
@@ -620,7 +758,10 @@ document.addEventListener('click',e=>{
  else if(a==='reset'){if(el.dataset.sure){S=defaults();save();render();toast('Данные стёрты')}else{el.dataset.sure='1';el.textContent='Точно стереть? Нажми ещё раз';setTimeout(()=>{el.dataset.sure='';el.textContent='Стереть всё'},4000)}}
  else if(a==='ttoggle'){const p=$('#tpanel');p.hidden=!p.hidden;if(!p.hidden)p.innerHTML=timerPanel()}
 });
-document.addEventListener('change',e=>{if(e.target.id==='termsample'){
+document.addEventListener('change',e=>{
+ if(e.target.id==='caljump'){const v=e.target.value;if(v){calDate=v;monthDate=v;render()}return}
+ if(e.target.name==='topic'&&e.target.closest&&e.target.closest('form[data-form=block]')){const f=e.target.form,tp=TBY[e.target.value];if(tp&&(!f.title.value||/^Go(:|$)/.test(f.title.value)))f.title.value='Go: '+tp.title;updateBlkInfo();return}
+ if(e.target.id==='termsample'){
   const sm=termSamples[+e.target.value],ta=$('#codeed'),tm=$('#term');
   if(e.target.value===''||!sm||!ta||!tm)return;
   const known=termSamples.some(x=>x.code===ta.value)||ta.value===TERM_TEMPLATE||!ta.value.trim();
@@ -631,7 +772,7 @@ document.addEventListener('change',e=>{if(e.target.id==='termsample'){
  if(e.target.id==='ttopic'){S.timer.topic=e.target.value;save()}
  if(e.target.id==='impf'){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>doImport(String(r.result));r.readAsText(f)}
 });
-document.addEventListener('input',e=>{if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
+document.addEventListener('input',e=>{if(e.target.closest&&e.target.closest('form[data-form=block]'))updateBlkInfo();if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
 document.addEventListener('submit',e=>{
  const f=e.target.closest('form');if(!f)return;e.preventDefault();
  const fd=Object.fromEntries(new FormData(f).entries()),k=f.dataset.form;
@@ -642,11 +783,10 @@ document.addEventListener('submit',e=>{
   const dur=Math.max(15,+fd.dur||50),start=toMin(fd.start);
   let b=fd.id?S.blocks.find(x=>x.id===fd.id):null;
   const tmp={dur,date:b?b.date:fd.date,start:b?b.start:start};
-  if(isWE(fd.date)){toast('Выходной. Блоки на выходные не ставим.');return}
-  if(overlapPair(fd.date,start,start+dur)){toast('Пересекается с парой. Выбери другое время.');return}
+  if(!fd.done){const msg=conflictMsg(fd.date,start,start+dur,fd.id);if(msg){toast(msg);return}}
   if(!b){b={id:uid()};S.blocks.push(b)}
-  Object.assign(b,{title:fd.title,topic:fd.topic||'',date:fd.date,start,dur,done:!!fd.done});
-  save();const m=$('.modal');m&&m.remove();render()}
+  Object.assign(b,{title:fd.title,topic:fd.topic||'',date:fd.date,start,dur,done:!!fd.done,manual:true});
+  save();if(!fd.done)rebuildPlan();const m=$('.modal');m&&m.remove();rerender()}
 });
 let downOnOverlay=false;
 document.addEventListener('mousedown',e=>{downOnOverlay=e.target.classList.contains('modal')});
@@ -680,15 +820,16 @@ function planSlots(date){
 function rebuildPlan(){
  const from=todayS(),nowD=new Date(),nowMin=nowD.getHours()*60+nowD.getMinutes();
  // выполненные блоки и прошлые дни остаются, все невыполненные с сегодняшнего дня заменяются
- S.blocks=S.blocks.filter(b=>b.done||b.date<from);
+ S.blocks=S.blocks.filter(b=>b.done||b.date<from||b.manual);
  const queue=[];
  TOPICS.forEach(t=>{const st=topicStatus(t.id);if(st==='done')return;
-  const have=S.blocks.filter(b=>b.topic===t.id&&b.done).length; // уже сделанные блоки темы не планируем заново
+  const have=S.blocks.filter(b=>b.topic===t.id&&(b.done||b.manual)).length; // уже сделанные блоки темы не планируем заново
   for(let i=have+1;i<=t.blocks;i++)queue.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')})});
  let d=from,placed=0;
  while(d<=PLAN_END&&queue.length){
   for(const st of planSlots(d)){
    if(d===from&&st<=nowMin)continue;
+   if(goConflict(d,st,st+BLOCK_MIN))continue;
    if(!queue.length)break;
    const q=queue.shift();
    S.blocks.push({id:uid(),title:q.title,topic:q.topic,date:d,start:st,dur:BLOCK_MIN,done:false});placed++;
@@ -930,13 +1071,14 @@ document.addEventListener('keydown',e=>{
   ta.setRangeText('\n'+indent,pos,ta.selectionEnd,'end');ta.dispatchEvent(new Event('input',{bubbles:true}));
  }
 });
+document.addEventListener('scroll',e=>{const c=e.target;if(c&&c.classList&&c.classList.contains('calwrap')){calScroll=c.scrollTop;calScrollX=c.scrollLeft}},true);
 document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){const g=$('#gut');if(g)g.scrollTop=e.target.scrollTop}},true);
 
 function init(){
  applyTheme();banner();
  startIcons();
  if((S.planV||0)<PLAN_VERSION)rebuildPlan();
- startVisit();setInterval(beat,5000);
+ startVisit();setInterval(beat,5000);setInterval(()=>{if(route==='calendar')updateNowLine()},60000);
  setInterval(()=>{if(route==='home'){const c=document.getElementById('todaycard');if(c)c.outerHTML=todayCard()}},30000);
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});
  addEventListener('pagehide',save);
