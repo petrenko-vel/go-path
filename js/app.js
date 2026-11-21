@@ -104,13 +104,23 @@ function isGo(b){return b.kind!=='other'}
 // v3: карта переделана под курсы Stepik (стеки, главы, темы). Учебные данные старой карты обнуляются,
 // остаются другие дела, пары, работа, оформление и дни активности
 function migrateRoadmap(){
- if((S.rmV||0)>=3)return;
- S.status={};S.doneAt={};S.notes={};S.code={};S.practice={};S.practiceAt={};S.quiz={};S.taskDone={};S.taskCode={};
- S.reviews=[];S.sessions=[];S.tasks=[];S.links=[];
- S.blocks=(S.blocks||[]).filter(b=>b.kind==='other');
- if(S.timer)S.timer.topic='';
- S.track.topics={};
- S.rmV=3;S.planV=0; // план построится заново при запуске
+ if((S.rmV||0)<3){
+  S.status={};S.doneAt={};S.notes={};S.code={};S.practice={};S.practiceAt={};S.quiz={};S.taskDone={};S.taskCode={};
+  S.reviews=[];S.sessions=[];S.tasks=[];S.links=[];
+  S.blocks=(S.blocks||[]).filter(b=>b.kind==='other');
+  if(S.timer)S.timer.topic='';
+  S.track.topics={};
+  S.rmV=3;S.planV=0; // план построится заново при запуске
+ }
+ // v4: Введение и «Базовые типы» до «Указатели» уже пройдены на Stepik: освоены, план начинается с «Указатели»
+ if((S.rmV||0)<4){
+  if(!S.status)S.status={};if(!S.doneAt)S.doneAt={};
+  const ids=[];for(let i=0;i<=5;i++)ids.push('s0-'+i);for(let i=0;i<=21;i++)ids.push('s1-'+i);
+  ids.forEach(id=>{if(S.status[id]!=='done'){S.status[id]='done';S.doneAt[id]='2026-11-20'}});
+  const t=todayS();
+  S.blocks=(S.blocks||[]).filter(b=>!(isGo(b)&&!b.done&&!b.manual&&b.date>=t)); // автоматические блоки будущего заново расставит план
+  S.rmV=4;S.planV=0;
+ }
 }
 // статус темы меняется: блоки этой темы в календаре подстраиваются
 function syncBlocksFromStatus(id,st,prev){
@@ -187,13 +197,13 @@ function render(){
  document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage'||route==='stack')&&k==='map')a.setAttribute('aria-current','page')});
  const m=$('#main');
  const fn={home:vHome,map:vMap,stage:vStage,stack:vStack,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
- m.className='wrap'+(route==='topic'||route==='calendar'?' wide':'');
+ m.className='wrap'+(route==='topic'||route==='calendar'?' wide':'')+(route==='calendar'?' calpage':'');
  m.innerHTML=fn();
  if(route==='calendar')bindCalendar();
  if(route==='materials')applyMatFilter();
  if(route==='topic')updateGutter();
  window.scrollTo(0,0);
- if(route==='calendar'){if(calAuto){calAuto=false;autoScrollCal()}}else calAuto=true;
+ if(route==='calendar'){if(calAuto){calAuto=false;if(fitCal()){render();return}autoScrollCal()}}else calAuto=true;
  if(route==='calendar'&&quickPre!==null){const tx=quickPre;quickPre=null;history.replaceState(null,'','#calendar');openQuick(tx)}
  renderTimer();
 }
@@ -736,7 +746,7 @@ function vSetup(){
 }
 
 // ---------- календарь ----------
-const HH=64;let CAL0=8*60,CAL1=21*60,calAuto=true;
+let HH=64;const HH_MAX=64,HH_MIN=32;let CAL0=8*60,CAL1=21*60,calAuto=true;
 let quickPre=null; // текст для окна быстрого добавления, пришедший из ссылки
 let calScroll=null,calScrollX=0; // положение прокрутки сетки календаря (null: выставить автоматически)
 const PAIR_NO={'11:10':3,'12:40':4,'14:10':5,'15:40':6,'17:10':7};
@@ -858,12 +868,27 @@ function bindCalendar(){
   n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openBlock(n.dataset.bid)}});
  });
 }
+// на компьютере календарь целиком влезает в окно: высота часа подбирается под высоту экрана
+function fitCal(){
+ if(calMode!=='week')return false;
+ const w=$('.calwrap');if(!w)return false;
+ let nh=HH_MAX;
+ if(innerWidth>900){
+  const hrs=(CAL1-CAL0)/60,head=w.querySelector('.dayh'),leg=$('.legend');
+  const top=w.getBoundingClientRect().top+scrollY;
+  const avail=innerHeight-top-(head?head.offsetHeight:36)-(leg?leg.offsetHeight+16:0)-12;
+  nh=Math.max(HH_MIN,Math.min(HH_MAX,Math.floor(avail/hrs)));
+ }
+ document.documentElement.style.setProperty('--hh',nh+'px');
+ if(nh===HH)return false;
+ HH=nh;return true;
+}
 // при первом открытии страницы календаря показываем вечер: там учёба
 function autoScrollCal(){
  const w=$('.calwrap');if(!w||calMode!=='week')return;
  const tc=w.querySelector('.daycol.today'),nd=new Date(),nm=nd.getHours()*60+nd.getMinutes();
  const focus=tc?Math.max(nm,16*60):16*60;
- window.scrollTo(0,Math.max(0,w.getBoundingClientRect().top+scrollY+(focus-CAL0)/60*HH-150));
+ if(innerWidth>900){window.scrollTo(0,0)}else window.scrollTo(0,Math.max(0,w.getBoundingClientRect().top+scrollY+(focus-CAL0)/60*HH-150));
  if(tc&&w.scrollWidth>w.clientWidth)w.scrollLeft=Math.max(0,tc.offsetLeft-50);
 }
 const WORK_START=9*60,WORK_END=12*60; // по утрам в будни работа, учёба вечером
@@ -927,7 +952,7 @@ function suggestSlot(){
 // сколько блоков плана не поместилось в календарь
 // сводка плана: сколько блоков расставлено, что пропущено и не поместилось
 function planStats(){
- const t=todayS(),open=TOPICS.filter(x=>topicStatus(x.id)!=='done'),ids=new Set(open.map(x=>x.id));
+ const t=todayS(),open=TOPICS.filter(x=>topicStatus(x.id)!=='done'&&!isLater(x)),ids=new Set(open.map(x=>x.id));
  const need=open.reduce((a,x)=>a+Math.max(0,x.blocks-S.blocks.filter(b=>b.topic===x.id&&b.done).length),0);
  const planned=S.blocks.filter(b=>!b.done&&b.date>=t&&!isMissed(b)&&ids.has(b.topic));
  return {planned:planned.length,last:planned.reduce((m,b)=>b.date>m?b.date:m,''),gap:Math.max(0,need-planned.length),missed:S.blocks.filter(b=>isGo(b)&&isMissed(b)).length};
@@ -1205,7 +1230,7 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
  'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
  'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
-const PLAN_VERSION=7; // при смене окон повышаем: план перестроится сам при следующем открытии
+const PLAN_VERSION=8; // при смене окон повышаем: план перестроится сам при следующем открытии
 const PLAN_END='2027-12-31'; // конец плана: карта из курсов Stepik большая, плану нужен запас
 const PLAN_SKIP=['2026-12-31','2027-01-01','2027-01-04','2027-01-05','2027-01-06','2027-01-07','2027-01-08','2027-02-23','2027-03-08','2027-05-03','2027-05-10']; // праздники (примерно) // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
@@ -1606,6 +1631,7 @@ function init(){
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});
  addEventListener('pagehide',save);
  window.addEventListener('hashchange',render);
+ let rsT=0;window.addEventListener('resize',()=>{clearTimeout(rsT);rsT=setTimeout(()=>{if(route==='calendar'&&calMode==='week'){calAuto=true;render()}},250)});
  setInterval(renderTimer,500);
  render();
 }

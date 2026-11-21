@@ -425,8 +425,8 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 /* календарь: шире и выше, без внутренней прокрутки */
 .calwrap{overflow:visible;max-height:none}
 .calgrid{grid-template-columns:54px repeat(7,minmax(0,1fr))}
-.hours div{height:64px}
-.daycol{background-size:100% 64px}
+.hours div{height:var(--hh,64px)}
+.daycol{background-size:100% var(--hh,64px)}
 .dayh{top:57px}
 .daycol.we{cursor:pointer;background-color:color-mix(in srgb,var(--mute) 7%,transparent)}
 .ev{font-size:13px}
@@ -551,3 +551,6 @@ pre.out.bad{background:var(--warnsoft);border-left-color:var(--bad)}
 .laterrow{margin:10px 0 0}
 .laterrow .btn.on{background:var(--line);color:var(--mute)}
 @media (max-width:560px){.hready .ring{width:104px;height:104px}.hr-h{font-size:19px}.hr-n b{font-size:21px}}
+
+/* календарь на компьютере: страница не прокручивается, высота часа подбирается под экран */
+@media (min-width:901px){main.calpage{padding-bottom:6px}}
