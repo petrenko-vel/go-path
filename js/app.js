@@ -53,10 +53,14 @@ function pairsOn(d){
 
 // ---------- темы ----------
 const TOPICS=[];
+const SBY=Object.fromEntries(STACKS.map(k=>[k.id,k]));
+// номер главы внутри своего стека: «Глава 3» считается в пределах стека
+STAGES.forEach(st=>{st.no=STAGES.filter(x=>x.stack===st.stack&&x.id<=st.id).length;st.cnt=STAGES.filter(x=>x.stack===st.stack).length});
 STAGES.forEach(st=>st.topics.forEach((t,i)=>{
  const d=TOPIC_DATA['s'+st.id+'-'+i]||null;
- TOPICS.push({id:'s'+st.id+'-'+i,stage:st.id,idx:i,title:t[0],what:t[1],why:t[2],diff:t[3],req:t[4],blocks:t[5],verify:t[6],d});
+ TOPICS.push({id:'s'+st.id+'-'+i,stage:st.id,stack:st.stack,idx:i,title:t[0],what:t[1],why:t[2],diff:t[3],req:t[4],blocks:t[5],verify:t[6],lesson:t[7]||0,course:t[8]||0,d});
 }));
+const chName=st=>'Глава '+st.no+'. '+st.title;
 const TBY=Object.fromEntries(TOPICS.map(t=>[t.id,t]));
 const TOTAL_BLOCKS=TOPICS.reduce((a,t)=>a+t.blocks,0);
 const DIFF=['','🟢','🟡','🔴'];
@@ -65,7 +69,7 @@ const STAT={new:'не начата',wip:'в работе',done:'освоена',
 // ---------- состояние ----------
 const KEY='gopath.v1';
 let storageOK=true;
-function defaults(){return {v:1,status:{'s0-0':'done'},doneAt:{'s0-0':'2026-11-10'},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],code:{},termHide:false,pairOv:{},workOv:{},workDef:null,practice:{},practiceAt:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
+function defaults(){return {v:1,status:{},doneAt:{},notes:{},blocks:[],reviews:[],tasks:[],sessions:[],code:{},termHide:false,pairOv:{},workOv:{},workDef:null,practice:{},practiceAt:{},quiz:{},later:{},taskDone:{},taskCode:{},track:{days:{},hours:{},topics:{},visits:[]},links:[],theme:'auto',timer:{mode:'work',dur:2700,endAt:null,left:2700,topic:''},ready:false}}
 function load(){
  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);return Object.assign(defaults(),o)}}catch(e){storageOK=false}
  return defaults();
@@ -73,7 +77,9 @@ function load(){
 let S=load();
 if(!S.practice||typeof S.practice!=='object')S.practice={};
 if(!S.practiceAt||typeof S.practiceAt!=='object')S.practiceAt={};
+['quiz','taskDone','taskCode'].forEach(k=>{if(!S[k]||typeof S[k]!=='object')S[k]={}});
 if(!S.code||typeof S.code!=='object')S.code={};
+if(!S.later||typeof S.later!=='object')S.later={};
 if(!S.pairOv)S.pairOv={};if(!S.workOv)S.workOv={};
 if(!S.track||typeof S.track!=='object')S.track={days:{},hours:{},topics:{},visits:[]};
 ['days','hours','topics'].forEach(k=>{if(!S.track[k])S.track[k]={}});if(!Array.isArray(S.track.visits))S.track.visits=[];
@@ -95,21 +101,16 @@ function setStatus(id,st,opts){
  if(!(opts&&opts.fromBlocks))syncBlocksFromStatus(id,st,prev);
 }
 function isGo(b){return b.kind!=='other'}
-// карта обучения выросла (19 этапов): старые номера тем заменяются новыми во всех данных
+// v3: карта переделана под курсы Stepik (стеки, главы, темы). Учебные данные старой карты обнуляются,
+// остаются другие дела, пары, работа, оформление и дни активности
 function migrateRoadmap(){
- if((S.rmV||0)>=2)return;
- const m=id=>ID_MAP[id]||id;
- const rk=o=>{const out={};Object.keys(o||{}).forEach(k=>{out[m(k)]=o[k]});return out};
- S.status=rk(S.status);S.doneAt=rk(S.doneAt);S.notes=rk(S.notes);S.code=rk(S.code);S.practice=rk(S.practice);
- const pa={};Object.keys(S.practiceAt||{}).forEach(k=>{const i=k.lastIndexOf(':');pa[m(k.slice(0,i))+k.slice(i)]=S.practiceAt[k]});S.practiceAt=pa;
- (S.blocks||[]).forEach(b=>{if(b.topic)b.topic=m(b.topic)});
- (S.reviews||[]).forEach(r=>{if(r.topic)r.topic=m(r.topic)});
- (S.sessions||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
- (S.tasks||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
- (S.links||[]).forEach(x=>{if(x.topic)x.topic=m(x.topic)});
- if(S.timer&&S.timer.topic)S.timer.topic=m(S.timer.topic);
- S.track.topics=rk(S.track.topics);
- S.rmV=2;S.planV=0; // план по новым темам построится заново при запуске
+ if((S.rmV||0)>=3)return;
+ S.status={};S.doneAt={};S.notes={};S.code={};S.practice={};S.practiceAt={};S.quiz={};S.taskDone={};S.taskCode={};
+ S.reviews=[];S.sessions=[];S.tasks=[];S.links=[];
+ S.blocks=(S.blocks||[]).filter(b=>b.kind==='other');
+ if(S.timer)S.timer.topic='';
+ S.track.topics={};
+ S.rmV=3;S.planV=0; // план построится заново при запуске
 }
 // статус темы меняется: блоки этой темы в календаре подстраиваются
 function syncBlocksFromStatus(id,st,prev){
@@ -147,7 +148,7 @@ function doneBlocks(){return TOPICS.filter(t=>topicStatus(t.id)==='done').reduce
 function activityDays(){
  const set=new Set();
  S.blocks.filter(b=>b.done&&isGo(b)).forEach(b=>set.add(b.date));
- S.sessions.forEach(x=>set.add(x.date));S.tasks.forEach(x=>set.add(x.date));Object.values(S.practiceAt).forEach(d=>set.add(d));
+ S.sessions.forEach(x=>set.add(x.date));S.tasks.forEach(x=>set.add(x.date));Object.values(S.practiceAt).forEach(d=>set.add(d));Object.values(S.taskDone).forEach(x=>x&&x.at&&set.add(x.at));Object.values(S.quiz).forEach(x=>x&&x.at&&set.add(x.at));
  Object.values(S.doneAt).forEach(d=>set.add(d));
  S.reviews.filter(r=>r.done&&r.doneAt).forEach(r=>set.add(r.doneAt));
  return set;
@@ -159,7 +160,9 @@ function streak(){
   if(act.has(d)){n++;d=addDays(d,-1)}else break}
  return n;
 }
-function nextTopic(){return TOPICS.find(t=>topicStatus(t.id)!=='done'&&topicStatus(t.id)!=='redo')||null}
+// «Можно позже»: тема не входит в срочное; твой выбор (S.later) сильнее разметки карты
+function isLater(t){return S.later[t.id]!==undefined?!!S.later[t.id]:!t.req}
+function nextTopic(){return TOPICS.find(t=>{const st=topicStatus(t.id);return st!=='done'&&st!=='redo'&&(!isLater(t)||st==='wip')})||null}
 function dueReviews(){const t=todayS();return S.reviews.filter(r=>!r.done&&r.due<=t)}
 function paceInfo(){
  const from=addDays(todayS(),-14);
@@ -174,15 +177,16 @@ function parseHash(){
  const h=(location.hash||'#home').slice(1);
  if(h.startsWith('t-')){route='topic';param=h.slice(2)}
  else if(h.startsWith('st-')){route='stage';param=h.slice(3)}
+ else if(h.startsWith('sk-')){route='stack';param=h.slice(3)}
  else if(h.startsWith('quick=')){route='calendar';param='';try{quickPre=decodeURIComponent(h.slice(6))}catch(_){quickPre=''}}
  else{route=['home','map','calendar','tasks','materials','stats','setup'].includes(h)?h:'home';param=''}
 }
 function rerender(){const y=scrollY;render();scrollTo(0,y)}
 function render(){
  parseHash();
- document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage')&&k==='map')a.setAttribute('aria-current','page')});
+ document.querySelectorAll('nav a').forEach(a=>{const k=a.getAttribute('href').slice(1);a.removeAttribute('aria-current');if(k===route||(route==='topic'||route==='stage'||route==='stack')&&k==='map')a.setAttribute('aria-current','page')});
  const m=$('#main');
- const fn={home:vHome,map:vMap,stage:vStage,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
+ const fn={home:vHome,map:vMap,stage:vStage,stack:vStack,topic:vTopic,calendar:vCalendar,tasks:vTasks,materials:vMaterials,stats:vStats,setup:vSetup}[route];
  m.className='wrap'+(route==='topic'||route==='calendar'?' wide':'');
  m.innerHTML=fn();
  if(route==='calendar')bindCalendar();
@@ -216,6 +220,50 @@ function todayCard(){
    :'<div class="hempty"><div class="he-ic">'+(hiddenCount?'🌙':'☕')+'</div><b>'+(hiddenCount?'На сегодня всё':'На сегодня ничего нет')+'</b>'+(hiddenCount?'<div class="small mute">Все дела на сегодня позади.</div>':'')+'</div>')
   +'<div class="row hc-act"><a class="btn sm ghost" href="#calendar">Открыть календарь</a></div></div>';
 }
+// ---------- готовность к первой стажировке ----------
+const INT_STACKS=['go','sql','docker','redis','kafka','project']; // Linux в готовность не входит
+function readiness(){
+ const t=todayS(),nd=new Date(),nowMin=nd.getHours()*60+nd.getMinutes();
+ const urgent=TOPICS.filter(x=>INT_STACKS.includes(x.stack)&&!isLater(x));
+ const ids=new Set(urgent.map(x=>x.id));
+ const total=urgent.reduce((a,x)=>a+x.blocks,0),done=urgent.filter(x=>topicStatus(x.id)==='done').reduce((a,x)=>a+x.blocks,0),left=total-done;
+ const pct=total?done/total*100:0;
+ // по плану: дата последнего невыполненного блока срочных тем в календаре
+ const open=S.blocks.filter(b=>isGo(b)&&!b.done&&ids.has(b.topic)&&topicStatus(b.topic)!=='done');
+ const lastDate=open.reduce((m,b)=>b.date>m?b.date:m,'');
+ const planDays=lastDate?Math.max(0,Math.round((parse(lastDate)-parse(t))/864e5)):null;
+ // по темпу: блоков за последние 14 дней / 14 календарных дней
+ const pace=paceInfo(),perDay=pace/14;
+ const paceDays=pace>=4&&left>0?Math.ceil(left/perDay):(left===0?0:null);
+ const paceDate=paceDays!=null?addDays(t,paceDays):null;
+ // опережение: просроченные невыполненные блоки (отставание) и выполненные блоки, поставленные на будущие дни (опережение)
+ const mine=S.blocks.filter(b=>isGo(b)&&ids.has(b.topic));
+ const behind=mine.filter(b=>!b.done&&(b.date<t||(b.date===t&&b.start+b.dur<=nowMin))).length;
+ const ahead=mine.filter(b=>b.done&&b.date>t).length;
+ const stacks=INT_STACKS.map(k=>{const ts=urgent.filter(x=>x.stack===k),all=ts.reduce((a,x)=>a+x.blocks,0),dn=ts.filter(x=>topicStatus(x.id)==='done').reduce((a,x)=>a+x.blocks,0);return {k,all,dn,p:all?dn/all*100:0}});
+ return {pct,total,done,left,planDays,lastDate,pace,paceDays,paceDate,behind,ahead,stacks};
+}
+function dayWord(n){return n%10===1&&n%100!==11?'день':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'дня':'дней'}
+function readyCard(){
+ const r=readiness();
+ const planTxt=r.left===0?'готово':(r.planDays==null?'—':r.planDays+' '+dayWord(r.planDays));
+ const planSub=r.left===0?'все срочные темы пройдены':(r.lastDate?'по плану до '+fmtD(r.lastDate):'в календаре нет блоков');
+ const paceTxt=r.left===0?'готово':(r.paceDays==null?'пока мало данных':'≈ '+r.paceDays+' '+dayWord(r.paceDays));
+ const paceSub=r.paceDays==null?'нужно хотя бы 4 пройденных блока за 2 недели':(r.left===0?'':'к '+fmtD(r.paceDate)+' · '+r.pace+' бл. за 2 недели');
+ let msg,cls='ok';
+ if(r.behind>0){msg='Отстаёшь от плана на '+r.behind+' '+(r.behind%10===1&&r.behind%100!==11?'блок':[2,3,4].includes(r.behind%10)&&![12,13,14].includes(r.behind%100)?'блока':'блоков');cls='warn'}
+ else if(r.ahead>0){msg='Опережаешь план на '+r.ahead+' '+(r.ahead%10===1&&r.ahead%100!==11?'блок':[2,3,4].includes(r.ahead%10)&&![12,13,14].includes(r.ahead%100)?'блока':'блоков')}
+ else msg='Всё по плану';
+ const tip='Считаются срочные темы Go, SQL, Docker, Redis, Kafka и итогового проекта (Linux и темы «Можно позже» не входят). Процент: пройденные блоки / все блоки этих тем. «По плану»: дней от сегодня до последнего невыполненного блока этих тем в календаре. «По твоему темпу»: оставшиеся блоки делить на блоки за последние 14 дней и умножить на 14 (в календарных днях); при меньше 4 блоков за 2 недели прогноз не показывается.';
+ return '<div class="card hready"><div class="hr-top">'+ring(r.pct)
+  +'<div class="hr-main"><div class="small mute">Готовность к первой стажировке <span class="hr-q" title="'+esc(tip)+'" tabindex="0" aria-label="'+esc(tip)+'">?</span></div>'
+  +'<h2 class="hr-h">Осталось '+r.left+' '+(r.left%10===1&&r.left%100!==11?'блок':[2,3,4].includes(r.left%10)&&![12,13,14].includes(r.left%100)?'блока':'блоков')+' из '+r.total+'</h2>'
+  +'<div class="hr-nums"><div class="hr-n"><div class="small mute">Дней по плану</div><b>'+planTxt+'</b><div class="small mute">'+planSub+'</div></div>'
+  +'<div class="hr-n"><div class="small mute">По твоему темпу</div><b>'+paceTxt+'</b><div class="small mute">'+paceSub+'</div></div></div>'
+  +'<div class="hr-msg '+cls+'">'+msg+'</div></div></div>'
+  +'<div class="hr-stacks">'+r.stacks.map(x=>'<a class="hr-s" href="#sk-'+x.k+'"><div class="row"><b class="sp">'+esc(SBY[x.k].title)+'</b><span class="small mute">'+x.dn+' / '+x.all+' бл. · '+Math.round(x.p)+'%</span></div>'+progressBar(x.p)+'</a>').join('')+'</div>'
+  +'<div class="row hr-foot"><a class="btn sm" href="#map">Открыть карту</a><span class="small mute">Не входят: Linux и темы «Можно позже»</span></div></div>';
+}
 let qShift=0;
 function dayHash(str){let h=0;for(const c of str)h=(h*31+c.charCodeAt(0))>>>0;return h}
 function vHome(){
@@ -226,14 +274,14 @@ function vHome(){
  const weeks=pace>=4?Math.ceil(left/(pace/2)):null;
  const dowFull=['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'][dow(t)-1];
  const pills=[fmtD(t),dowFull].concat(isWE(t)?[]:[parity(t)==='Ч'?'Числитель':'Знаменатель']);
- // сегменты пути: один на этап, заливка по освоенным блокам
- const cur=(STAGES.find(st=>TOPICS.filter(x=>x.stage===st.id).some(x=>topicStatus(x.id)!=='done'))||{}).id;
- const segs=STAGES.map(st=>{const ts=TOPICS.filter(x=>x.stage===st.id),all=ts.reduce((a,x)=>a+x.blocks,0),dn=ts.filter(x=>topicStatus(x.id)==='done').reduce((a,x)=>a+x.blocks,0),p=all?dn/all*100:0;
-  return '<a class="pseg'+(st.id===cur?' cur':'')+(p>=100?' full':'')+'" href="#st-'+st.id+'" title="Этап '+st.id+'. '+esc(st.title)+': '+Math.round(p)+'%" style="flex:'+Math.max(all,2)+'"><i style="width:'+p+'%"></i><span>'+st.id+'</span></a>'}).join('');
+ // сегменты пути: один на стек, заливка по освоенным блокам
+ const curK=nt?nt.stack:null;
+ const segs=STACKS.map(k=>{const ts=TOPICS.filter(x=>x.stack===k.id),all=ts.reduce((a,x)=>a+x.blocks,0),dn=ts.filter(x=>topicStatus(x.id)==='done').reduce((a,x)=>a+x.blocks,0),p=all?dn/all*100:0;
+  return '<a class="pseg'+(k.id===curK?' cur':'')+(p>=100?' full':'')+'" href="#sk-'+k.id+'" title="'+esc(k.title)+': '+Math.round(p)+'%" style="flex:'+Math.max(all,10)+'"><i style="width:'+p+'%"></i><span>'+esc(k.title)+'</span></a>'}).join('');
  const tile=(ic,n,l)=>'<div class="hstat"><span class="hi">'+ic+'</span><div><b>'+n+'</b><div class="small mute">'+l+'</div></div></div>';
  const progress='<div class="card hprog"><div class="hp-top"><div><div class="hp-pct">'+Math.round(pct)+'<small>%</small></div><div class="small mute">пройдено блоков: '+db+' из '+TOTAL_BLOCKS+'</div></div>'
   +'<div class="hstats">'+tile('🔥',streak(),(n=>n%10===1&&n%100!==11?'день':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'дня':'дней')(streak())+' подряд')+tile('📚',doneT+' / '+TOPICS.length,'тем освоено')+tile('⏳','≈ '+Math.round(left*50/60)+' ч','осталось занятий')+tile('🗓',weeks?'≈ '+weeks+' нед.':'—',weeks?'до конца по твоему темпу':'прогноз появится через 2 недели')+'</div></div>'
-  +'<div class="ppath" aria-label="Путь по этапам">'+segs+'</div><div class="small mute pathcap">Этапы 0–'+(STAGES.length-1)+': каждый сегмент заполняется по мере освоения тем. '+(cur!==undefined?'Сейчас этап '+cur+'.':'')+'</div></div>';
+  +'<div class="ppath" aria-label="Путь по стекам">'+segs+'</div><div class="small mute pathcap">Стеки идут по порядку: каждый сегмент заполняется по мере освоения тем. '+(curK?'Сейчас: '+esc(SBY[curK].title)+'.':'')+'</div></div>';
  // текущая тема
  let curCard;
  if(nt){
@@ -241,10 +289,10 @@ function vHome(){
   const pi=practiceItems(nt).length,pdn=practiceDone(nt.id);
   curCard='<div class="card hcard"><div class="hc-head"><span class="hc-ic">🎯</span><h3>Текущая тема</h3></div>'
    +'<a class="nolink hc-title" href="#t-'+nt.id+'">'+esc(nt.title)+'</a>'
-   +'<div class="small mute">Этап '+nt.stage+'. '+esc(STAGES[nt.stage].title)+'</div>'
+   +'<div class="small mute">'+esc(SBY[nt.stack].title)+' · '+esc(chName(STAGES[nt.stage]))+'</div>'
    +'<p class="small hc-what">'+esc(nt.what)+'</p>'
    +'<div class="tmeta"><span class="chip">'+DIFF[nt.diff]+' '+DIFF_T[nt.diff]+'</span><span class="chip">блоков: '+nt.blocks+'</span>'+(nb?'<span class="chip warn">📅 '+fmtD(nb.date)+', '+fmtT(nb.start)+'</span>':'')+'</div>'
-   +(pi&&pdn?'<div class="small mute">Практика: '+pdn+' из '+pi+'</div>'+progressBar(pdn/pi*100):'')
+   +(hasAuto(nt)?'<div class="small mute">Тест: '+(quizOk(nt.id)?'пройден ✓':'нет')+' · Практика: '+(taskOk(nt.id)?'пройдена ✓':'нет')+'</div>':(pi&&pdn?'<div class="small mute">Практика: '+pdn+' из '+pi+'</div>'+progressBar(pdn/pi*100):''))
    +'<div class="row hc-act"><a class="btn pri" data-act="opennote" data-id="'+nt.id+'"'+(stt==='new'?' data-st="wip"':'')+' href="#t-'+nt.id+'">'+(stt==='new'?'Начать':'Продолжить')+'</a>'+(nt.d?'':'')+(!nb?'<button class="btn ghost" data-act="plan" data-id="'+nt.id+'">📅 В календарь</button>':'')+'</div></div>';
  }else curCard='<div class="card hcard"><div class="hc-head"><span class="hc-ic">🎯</span><h3>Текущая тема</h3></div><p>Все темы пройдены. Это успех 🎉</p></div>';
  // повторения
@@ -254,6 +302,7 @@ function vHome(){
   +(dr.length?dr.map(r=>'<div class="hrow"><div class="t"><a class="nolink" href="#t-'+r.topic+'"><b>'+esc(TBY[r.topic].title)+'</b></a><div class="small mute">'+(RSTEP[r.step]||'повтор')+(r.due<t?' · просрочено с '+fmtD(r.due):'')+'</div></div><button class="btn sm pri" data-act="revdone" data-id="'+r.id+'">Повторила</button></div>').join('')
    :'<div class="hempty"><div class="he-ic">🎉</div><b>Всё повторено</b><div class="small mute">'+(upcoming?'Ближайшее повторение: '+fmtD(upcoming.due)+', «'+esc(TBY[upcoming.topic].title)+'».':'Повторения появятся, когда ты освоишь первую тему.')+'</div></div>')+'</div>';
  return '<div class="hello"><h1>Привет, Валерия!</h1><div class="pills">'+pills.map(x=>'<span class="dpill">'+x+'</span>').join('')+'</div></div>'
+  +readyCard()
   +progress
   +'<div class="hgrid">'+curCard+revCard+todayCard()+'</div>'
   +'<div class="hgrid">'+quizCard(t)+achCard(doneT)+'</div>';
@@ -286,7 +335,7 @@ function achCard(doneT){
   ['⏱','Первый блок','завершить блок по таймеру',timers,1,'#8b5cf6'],
   ['✅','Практик','выполнить 5 заданий практики',pr,5,'#0f9b8e'],
   ['🔁','Память тренирована','сделать первое повторение',rv,1,'#d6457a'],
-  ['🧱','Инструменты готовы','пройти этап 0',s0d,s0.length,'#d99a00'],
+  ['🧱','Первая глава пройдена','пройти первую главу Go',s0d,s0.length,'#d99a00'],
   ['🧠','Десятка','освоить 10 тем',doneT,10,'#5566d6']];
  const got=list.filter(x=>x[3]>=x[4]).length;
  return '<div class="card hcard"><div class="hc-head"><span class="hc-ic">🏅</span><h3>Достижения</h3><span class="achcount"><b>'+got+'</b> из '+list.length+'</span></div>'
@@ -297,40 +346,67 @@ function achCard(doneT){
 }
 function stageRow(st){
  const ts=TOPICS.filter(t=>t.stage===st.id),d=ts.filter(t=>topicStatus(t.id)==='done').length;
- return '<a class="item" href="#st-'+st.id+'"><span class="t"><b>Этап '+st.id+'. '+esc(st.title)+'</b><br><span class="small mute">'+d+' из '+ts.length+' тем · '+ts.reduce((a,t)=>a+t.blocks,0)+' блоков</span></span><span class="prog">'+progressBar(d/ts.length*100)+'<b class="pct">'+Math.round(d/ts.length*100)+'%</b></span></a>';
+ return '<a class="item" href="#st-'+st.id+'"><span class="t"><b>'+esc(chName(st))+'</b><br><span class="small mute">'+d+' из '+ts.length+' тем · '+ts.reduce((a,t)=>a+t.blocks,0)+' блоков</span></span><span class="prog">'+progressBar(ts.length?d/ts.length*100:0)+'<b class="pct">'+Math.round(ts.length?d/ts.length*100:0)+'%</b></span></a>';
 }
-const STAGE_ICON=['🛠','🔤','🧠','✨','🧪','⚡','🌐','🗄','🧱','🔐','🏛','🚀','📨','🔗','📡','🖥','🎯','⏱','🎓'];
+// глава: карточка на странице стека
 function mapStage(st,cur){
- const ts=TOPICS.filter(t=>t.stage===st.id),d=ts.filter(t=>topicStatus(t.id)==='done').length,pct=d/ts.length*100;
+ const ts=TOPICS.filter(t=>t.stage===st.id),d=ts.filter(t=>topicStatus(t.id)==='done').length,pct=ts.length?d/ts.length*100:0;
  const state=d===ts.length?'done':(st.id===cur?'cur':'next');
  const blocks=ts.reduce((a,t)=>a+t.blocks,0),hrs=Math.round(blocks*50/60*10)/10;
  const nt=ts.find(t=>topicStatus(t.id)!=='done');
- const badge={done:'Пройден',cur:'Сейчас здесь',next:'Впереди'}[state];
- return '<div class="mstage '+state+'"><div class="mnode">'+(state==='done'?'✓':STAGE_ICON[st.id]||st.id)+'</div>'
-  +'<div class="card mcardstage"><div class="row"><span class="small mute">Этап '+st.id+'</span><span class="mbadge '+state+'">'+badge+'</span><span class="sp"></span><b class="pct">'+Math.round(pct)+'%</b></div>'
+ const badge={done:'Пройдена',cur:'Сейчас здесь',next:'Впереди'}[state];
+ const vid=ts.filter(t=>t.lesson).length;
+ return '<div class="mstage '+state+'"><div class="mnode">'+(state==='done'?'✓':st.no)+'</div>'
+  +'<div class="card mcardstage"><div class="row"><span class="small mute">Глава '+st.no+' из '+st.cnt+'</span><span class="mbadge '+state+'">'+badge+'</span><span class="sp"></span><b class="pct">'+Math.round(pct)+'%</b></div>'
   +'<h3><a class="nolink" href="#st-'+st.id+'">'+esc(st.title)+'</a></h3>'
   +progressBar(pct)
-  +'<div class="mdots" aria-label="Темы этапа">'+ts.map(t=>'<a class="dot s-'+topicStatus(t.id)+'" href="#t-'+t.id+'" title="'+esc(t.title)+' · '+STAT[topicStatus(t.id)]+'"></a>').join('')+'</div>'
-  +'<div class="small mute">'+d+' из '+ts.length+' тем · '+blocks+' блоков · ≈ '+hrs+' ч</div>'
-  +'<div class="row mact"><a class="btn sm'+(state==='cur'?' pri':'')+'" href="#st-'+st.id+'">Открыть этап</a>'+(nt&&state!=='done'?'<a class="btn sm ghost" data-act="opennote" href="#t-'+nt.id+'">'+(state==='cur'?'Продолжить':'Начать')+': '+esc(nt.title)+'</a>':'')+'</div>'
+  +(ts.length<=40?'<div class="mdots" aria-label="Темы главы">'+ts.map(t=>'<a class="dot s-'+topicStatus(t.id)+(isLater(t)?' later':'')+'" href="#t-'+t.id+'" title="'+esc(t.title)+' · '+STAT[topicStatus(t.id)]+'"></a>').join('')+'</div>':'')
+  +'<div class="small mute">'+d+' из '+ts.length+' тем · '+blocks+' блоков · ≈ '+hrs+' ч'+(vid?' · видео: '+vid:' · без видео')+'</div>'
+  +'<div class="row mact"><a class="btn sm'+(state==='cur'?' pri':'')+'" href="#st-'+st.id+'">Открыть главу</a>'+(nt&&state!=='done'?'<a class="btn sm ghost" data-act="opennote" href="#t-'+nt.id+'">'+(state==='cur'?'Продолжить':'Начать')+': '+esc(nt.title)+'</a>':'')+'</div>'
   +'</div></div>';
 }
+function stackStat(k){
+ const chs=STAGES.filter(st=>st.stack===k.id),ts=TOPICS.filter(t=>t.stack===k.id);
+ const done=ts.filter(t=>topicStatus(t.id)==='done').length,blocks=ts.reduce((a,t)=>a+t.blocks,0),left=ts.filter(t=>topicStatus(t.id)!=='done').reduce((a,t)=>a+t.blocks,0);
+ return {chs,ts,done,blocks,left,pct:ts.length?done/ts.length*100:0,nt:ts.find(t=>topicStatus(t.id)!=='done'&&topicStatus(t.id)!=='redo')||ts.find(t=>topicStatus(t.id)==='redo')||null};
+}
+// стек: карточка на карте
+function mapStack(k,curK){
+ const x=stackStat(k),state=x.done===x.ts.length&&x.ts.length?'done':(k.id===curK?'cur':'next');
+ const badge={done:'Пройден',cur:'Сейчас здесь',next:'Впереди'}[state];
+ return '<div class="card mstack '+state+'"><div class="row"><span class="mstic">'+k.icon+'</span><div class="sp"><h2 style="margin:0"><a class="nolink" href="#sk-'+k.id+'">'+esc(k.title)+'</a></h2><span class="small mute">'+esc(k.desc||'')+'</span></div><span class="mbadge '+state+'">'+badge+'</span></div>'
+  +'<div class="row"><b class="pct">'+Math.round(x.pct)+'%</b><span class="sp">'+progressBar(x.pct)+'</span></div>'
+  +'<div class="small mute">глав: '+x.chs.length+' · тем: '+x.done+' из '+x.ts.length+' · ≈ '+Math.round(x.left*50/60)+' ч осталось'+(k.course?' · курс: '+esc(k.course.title):'')+'</div>'
+  +'<div class="row mact"><a class="btn sm'+(state==='cur'?' pri':'')+'" href="#sk-'+k.id+'">Открыть</a>'+(x.nt&&state!=='done'?'<a class="btn sm ghost" data-act="opennote" href="#t-'+x.nt.id+'">'+(state==='cur'?'Продолжить':'Начать')+': '+esc(x.nt.title)+'</a>':'')+'</div></div>';
+}
 function vMap(){
- const total=TOPICS.length,done=TOPICS.filter(t=>topicStatus(t.id)==='done').length,pct=done/total*100;
+ const total=TOPICS.length,done=TOPICS.filter(t=>topicStatus(t.id)==='done').length,pct=total?done/total*100:0;
  const left=TOPICS.filter(t=>topicStatus(t.id)!=='done').reduce((a,t)=>a+t.blocks,0);
- const cur=(STAGES.find(st=>TOPICS.filter(t=>t.stage===st.id).some(t=>topicStatus(t.id)!=='done'))||{}).id;
- const nt=nextTopic();
+ const nt=nextTopic(),curK=nt?nt.stack:null;
  return '<h1>Карта обучения</h1>'
- +'<div class="card shero">'+ring(pct)+'<div class="shtxt"><div class="small mute">Твой путь по Go</div><h2 style="margin:2px 0 8px">'+(cur!==undefined?'Сейчас: этап '+cur+'. '+esc(STAGES[cur].title):'Все этапы пройдены')+'</h2>'
+ +'<div class="card shero">'+ring(pct)+'<div class="shtxt"><div class="small mute">Твой путь: стеки по порядку</div><h2 style="margin:2px 0 8px">'+(curK?'Сейчас: '+esc(SBY[curK].title):'Все стеки пройдены')+'</h2>'
  +'<div class="tmeta"><span class="chip ok">освоено тем: '+done+' из '+total+'</span><span class="chip">осталось блоков: '+left+'</span><span class="chip">≈ '+Math.round(left*50/60)+' ч занятий</span></div>'
  +(nt?'<p><a class="btn pri" data-act="opennote" href="#t-'+nt.id+'">Продолжить: '+esc(nt.title)+'</a></p>':'')+'</div></div>'
- +'<p class="small mute maplegend"><span class="dot s-new"></span> не начата <span class="dot s-wip"></span> в работе <span class="dot s-done"></span> освоена <span class="dot s-redo"></span> на повторе. Точки внутри этапа это темы: нажми, чтобы открыть.</p>'
- +'<div class="mroad">'+STAGES.map(st=>mapStage(st,cur)).join('')+'</div>'
+ +'<p class="small mute maplegend">Карта делится на стеки, внутри стека главы, внутри главы темы. Открой стек, затем главу.</p>'
+ +'<div class="mstacks">'+STACKS.map(k=>mapStack(k,curK)).join('')+'</div>'
  +'<div class="card"><h3>Дальше: Middle и Senior</h3>'+LEVELS_NEXT.map(l=>'<p><b>'+l[0]+'.</b> '+esc(l[1])+'</p>').join('')+'</div>';
+}
+function vStack(){
+ const k=SBY[param];if(!k)return '<p>Стек не найден.</p>';
+ const x=stackStat(k),cur=(x.chs.find(st=>TOPICS.filter(t=>t.stage===st.id).some(t=>topicStatus(t.id)!=='done'))||{}).id;
+ const vid=x.ts.filter(t=>t.lesson).length;
+ return '<div class="row"><a href="#map">← Карта</a></div>'
+ +'<div class="card shero">'+ring(x.pct)+'<div class="shtxt"><div class="small mute">Стек</div><h1>'+k.icon+' '+esc(k.title)+'</h1>'
+ +'<p class="small mute">'+esc(k.desc||'')+'</p>'
+ +'<div class="tmeta"><span class="chip">глав: '+x.chs.length+'</span><span class="chip ok">освоено тем: '+x.done+' из '+x.ts.length+'</span><span class="chip">≈ '+Math.round(x.left*50/60)+' ч осталось</span>'+(vid?'<span class="chip">видео-уроков: '+vid+'</span>':'')+'</div>'
+ +(k.course?'<p class="small">Видеокурс: <a href="'+esc(k.course.url)+'" target="_blank" rel="noopener noreferrer">'+esc(k.course.title)+'</a></p>':'')
+ +(x.nt?'<p><a class="btn pri" data-act="opennote" href="#t-'+x.nt.id+'">'+(topicStatus(x.nt.id)==='wip'?'Продолжить':'Начать')+': '+esc(x.nt.title)+'</a></p>':'<p><b>Стек пройден 🎉</b></p>')
+ +'</div></div>'
+ +'<div class="mroad">'+x.chs.map(st=>mapStage(st,cur)).join('')+'</div>';
 }
 function topicRow(t){
  const st=topicStatus(t.id);
- return '<a class="item" href="#t-'+t.id+'"><span class="t"><b>'+esc(t.title)+'</b><br><span class="small mute">'+DIFF[t.diff]+' · '+(t.req?'обяз.':'жел.')+' · блоков: '+t.blocks+(t.d?' · есть конспект':'')+'</span></span><span class="small stt'+(st==='done'?' done':'')+'">'+STAT[st]+'</span></a>';
+ return '<a class="item" href="#t-'+t.id+'"><span class="t"><b>'+esc(t.title)+'</b><br><span class="small mute">'+DIFF[t.diff]+' · '+(isLater(t)?'можно позже':'срочная')+' · блоков: '+t.blocks+(t.d?' · есть конспект':'')+'</span></span><span class="small stt'+(st==='done'?' done':'')+'">'+STAT[st]+'</span></a>';
 }
 let stageFilter='all',stageReq=false;
 const DIFF_T=['','Лёгкая','Средняя','Сложная'];
@@ -342,7 +418,7 @@ function stageTopicCard(t,n){
  const main={new:['Начать','wip',true],wip:['Продолжить','',true],redo:['Повторить','',true],done:[hasNote?'Читать конспект':'Открыть','',false]}[st];
  const second={new:['done','Уже знаю ✓'],wip:['done','Освоена ✓'],redo:['done','Освоена ✓'],done:['redo','На повтор']}[st];
  const hrs=Math.round(t.blocks*50/60*10)/10;
- return '<div class="tc st-'+st+'"><div class="tnum">'+(st==='done'?'✓':n)+'</div><div class="tbody"><div class="tmain">'
+ return '<div class="tc st-'+st+(isLater(t)?' later':'')+'"><div class="tnum">'+(st==='done'?'✓':n)+'</div><div class="tbody"><div class="tmain">'
  +'<a class="ttl nolink" href="#t-'+t.id+'">'+esc(t.title)+'</a>'
  +'<p class="small mute twhat">'+esc(t.what)+'</p>'
  +'<div class="row tact"><a class="btn sm'+(main[2]?' pri':'')+'" data-act="opennote" data-id="'+t.id+'"'+(main[1]?' data-st="'+main[1]+'"':'')+' href="'+href+'">'+main[0]+'</a>'
@@ -350,29 +426,36 @@ function stageTopicCard(t,n){
  +(!nb&&st!=='done'?'<button class="btn sm ghost" data-act="plan" data-id="'+t.id+'" title="Поставить блок в календарь">📅 В календарь</button>':'')+'</div></div>'
  +'<div class="tinfo"><span class="small stt'+(st==='done'?' done':'')+'">'+STAT[st]+'</span>'
  +'<ul><li><span class="ic">'+DIFF[t.diff]+'</span>'+DIFF_T[t.diff]+'</li>'
- +'<li><span class="ic">'+(t.req?'●':'○')+'</span>'+(t.req?'обязательная':'желательная')+'</li>'
+ +'<li><span class="ic">'+(isLater(t)?'○':'●')+'</span>'+(isLater(t)?'можно позже':'срочная')+'</li>'
  +'<li><span class="ic">⏱</span>блоков: '+t.blocks+' · ~'+hrs+' ч</li>'
  +(nb?'<li class="cal"><span class="ic">📅</span>'+fmtD(nb.date)+', '+fmtT(nb.start)+'</li>':'')+'</ul></div>'
  +'</div></div>';
 }
 function vStage(){
- const st=STAGES[+param];if(!st)return '<p>Этап не найден.</p>';
+ const st=STAGES[+param];if(!st)return '<p>Глава не найдена.</p>';
  const all=TOPICS.filter(t=>t.stage===st.id),cnt=k=>all.filter(t=>topicStatus(t.id)===k).length;
  const done=cnt('done'),pct=all.length?done/all.length*100:0;
  const left=all.filter(t=>topicStatus(t.id)!=='done').reduce((a,t)=>a+t.blocks,0);
  const nt=all.find(t=>topicStatus(t.id)!=='done'&&topicStatus(t.id)!=='redo')||all.find(t=>topicStatus(t.id)==='redo');
- const shown=all.filter(t=>(stageFilter==='all'||topicStatus(t.id)===stageFilter)&&(!stageReq||t.req));
+ const shown=all.filter(t=>(stageFilter==='all'||topicStatus(t.id)===stageFilter)&&(!stageReq||!isLater(t)));
  const fl=[['all','Все',all.length],['wip','В работе',cnt('wip')],['done','Освоены',done],['redo','На повторе',cnt('redo')]];
- const prev=STAGES[st.id-1],next=STAGES[st.id+1];
- return '<div class="row"><a href="#map">← Карта</a><span class="sp"></span>'+(prev?'<a class="btn sm" href="#st-'+prev.id+'">← Этап '+prev.id+'</a>':'')+(next?'<a class="btn sm" href="#st-'+next.id+'">Этап '+next.id+' →</a>':'')+'</div>'
- +'<div class="card shero">'+ring(pct)+'<div class="shtxt"><div class="small mute">Этап '+st.id+' из '+(STAGES.length-1)+'</div><h1>'+esc(st.title)+'</h1>'
+ const prev=STAGES[st.id-1]&&STAGES[st.id-1].stack===st.stack?STAGES[st.id-1]:null,next=STAGES[st.id+1]&&STAGES[st.id+1].stack===st.stack?STAGES[st.id+1]:null;
+ return '<div class="row"><a href="#sk-'+st.stack+'">← Стек '+esc(SBY[st.stack].title)+'</a><span class="sp"></span>'+(prev?'<a class="btn sm" href="#st-'+prev.id+'">← Глава '+prev.no+'</a>':'')+(next?'<a class="btn sm" href="#st-'+next.id+'">Глава '+next.no+' →</a>':'')+'</div>'
+ +'<div class="card shero">'+ring(pct)+'<div class="shtxt"><div class="small mute">'+esc(SBY[st.stack].title)+' · глава '+st.no+' из '+st.cnt+'</div><h1>'+esc(st.title)+'</h1>'
  +'<div class="tmeta"><span class="chip ok">освоено: '+done+' из '+all.length+'</span><span class="chip">осталось блоков: '+left+'</span><span class="chip">≈ '+Math.round(left*50/60*10)/10+' ч занятий</span></div>'
- +(nt?'<p><a class="btn pri" href="#t-'+nt.id+'">'+(topicStatus(nt.id)==='wip'?'Продолжить':'Начать')+': '+esc(nt.title)+'</a></p>':'<p><b>Этап пройден 🎉</b></p>')
+ +(all.some(t=>t.lesson)?'':'<p class="small mute">В этой главе нет видео-уроков Stepik: изучаешь по конспекту.</p>')
+ +(nt?'<p><a class="btn pri" href="#t-'+nt.id+'">'+(topicStatus(nt.id)==='wip'?'Продолжить':'Начать')+': '+esc(nt.title)+'</a></p>':'<p><b>Глава пройдена 🎉</b></p>')
  +'</div></div>'
  +'<div class="stlayout"><div class="stmain">'
- +'<div class="row filters">'+fl.map(f=>'<button class="btn sm'+(stageFilter===f[0]?' on':'')+'" data-act="sfilter" data-v="'+f[0]+'">'+f[1]+' · '+f[2]+'</button>').join('')+'<span class="sp"></span><label class="chk"><input type="checkbox" data-act="sreq"'+(stageReq?' checked':'')+'> только обязательные</label></div>'
+ +'<div class="row filters">'+fl.map(f=>'<button class="btn sm'+(stageFilter===f[0]?' on':'')+'" data-act="sfilter" data-v="'+f[0]+'">'+f[1]+' · '+f[2]+'</button>').join('')+'<span class="sp"></span><label class="chk"><input type="checkbox" data-act="sreq"'+(stageReq?' checked':'')+'> скрыть «Можно позже»</label></div>'
  +'<div class="tlist">'+(shown.length?shown.map(t=>stageTopicCard(t,all.indexOf(t)+1)).join(''):'<div class="card mute">По этому фильтру тем нет.</div>')+'</div></div>'
  +'<aside class="stside"><div class="card tip"><h3>Как учить тебе</h3><p class="small">'+esc(st.how)+'</p></div></aside></div>';
+}
+// код с нумерацией строк и разбором «строка → что делает и зачем»
+function linesBlock(code,ex){
+ const ls=String(code).replace(/\n$/,'').split('\n');
+ return '<div class="lines"><pre class="lcode"><code>'+ls.map(l=>'<span class="ln">'+(esc(l)||' ')+'</span>').join('')+'</code></pre>'
+  +(ex.length?'<div class="lexpl"><div class="lhead">Разбор по строкам</div><ol>'+ex.map(e=>'<li><span class="lref">'+(/[–-]/.test(String(e[0]))?'строки ':'строка ')+esc(e[0])+'</span><span class="ltxt">'+e[1]+'</span></li>').join('')+'</ol></div>':'')+'</div>';
 }
 function renderBlocks(bs){
  return bs.map(b=>{const k=b[0];
@@ -382,6 +465,8 @@ function renderBlocks(bs){
   if(k==='case')return '<div class="case"><div class="chead">💼 '+esc(b[1])+'</div>'+b[2]+'</div>';
   if(k==='ol')return '<ol class="steps">'+b[1].map(x=>'<li>'+x+'</li>').join('')+'</ol>';
   if(k==='src')return '<div class="srcs"><h3>Источники и где читать дальше</h3>'+b[1].map(l=>'<a class="item" href="'+esc(l[1])+'" target="_blank" rel="noopener noreferrer"><span>📘</span><span class="t"><b>'+esc(l[0])+'</b><br><span class="small mute">'+esc(l[2])+'</span></span><span class="chip">'+(l[3]==='ru'?'RU':'EN')+'</span></a>').join('')+'</div>';
+  if(k==='def')return '<div class="def"><div class="dhead">Определение</div><div class="dbody">'+b[1]+'</div></div>';
+  if(k==='lines')return linesBlock(b[1],b[2]||[]);
   if(k==='ul')return '<ul>'+b[1].map(x=>'<li>'+x+'</li>').join('')+'</ul>';
   if(k==='code')return '<pre><code>'+esc(b[1])+'</code></pre>';
   if(k==='out')return '<pre class="out"><code>'+esc(b[1])+'</code></pre>';
@@ -398,11 +483,12 @@ function linkRow(l){
 function vTopic(){
  const t=TBY[param];if(!t)return '<p>Тема не найдена.</p>';
  const st=topicStatus(t.id);
- const tabs=[['note','Конспект'],['mat','Материалы'],['my','Мои заметки'],['task','Практика'+(practiceDone(t.id)?' '+practiceDone(t.id)+'/'+practiceItems(t).length:'')]];
+ const qz=S.quiz[t.id],td=S.taskDone[t.id];
+ const tabs=[['note','Конспект'],['mat','Материалы'],['my','Мои заметки'],['quiz','Тест'+(qz&&qz.passed?' ✓':'')],['task','Практика'+(hasTask(t)?(td&&td.passed?' ✓':''):(practiceDone(t.id)?' '+practiceDone(t.id)+'/'+practiceItems(t).length:''))]];
  let body='';
  if(topicTab==='note'){
   body=t.d?renderBlocks(t.d.b)+'<div class="card"><h3>Проверь себя</h3><p class="small mute">Сначала ответь сама, потом открой. Ответ без «почему» не засчитывается.</p>'+t.d.q.map(q=>'<details><summary>'+esc(q[0])+'</summary><p>'+esc(q[1])+'</p></details>').join('')+'</div>'
-   :'<div class="callout">Конспект для этой темы появится, когда дойдём до неё: я напишу его в ходе занятия и добавлю сюда.</div>';
+   :'<div class="callout">Конспект для этой темы появится, когда дойдём до её главы: я напишу его с определением, примерами по строкам, применением, тестом и практикой и добавлю сюда.</div>';
  }else if(topicTab==='mat'){
   const ls=(t.d?t.d.l:[]).concat(S.links.filter(l=>l.topic===t.id).map(l=>[l.type,l.title,l.url,l.lang]));
   const hasVid=ls.some(l=>l[0]==='video');
@@ -410,46 +496,80 @@ function vTopic(){
    +'<div class="card"><h3>Добавить ссылку</h3><form data-form="addlink"><input type="hidden" name="topic" value="'+t.id+'"><label>Название</label><input type="text" name="title" required><label>Адрес</label><input type="url" name="url" required placeholder="https://"><div class="row"><div><label>Тип</label><select name="type"><option value="art">Статья</option><option value="video">Видео</option><option value="course">Курс</option><option value="doc">Документация</option><option value="trainer">Тренажёр</option></select></div><div><label>Язык</label><select name="lang"><option value="ru">RU</option><option value="en">EN</option></select></div></div><p><button class="btn pri" type="submit">Добавить</button></p></form></div>';
  }else if(topicTab==='my'){
   body='<label for="nt">Заметки к теме (сохраняются сразу)</label><textarea id="nt" data-note="'+t.id+'" style="min-height:200px">'+esc(S.notes[t.id]||'')+'</textarea>';
+ }else if(topicTab==='quiz'){
+  body=quizBlock(t);
  }else{
-  body=practiceBlock(t);
+  body=hasTask(t)?taskBlock(t):practiceBlock(t);
  }
  const ti=TOPICS.indexOf(t),pv=TOPICS[ti-1],nx=TOPICS[ti+1];
  const sameStage=TOPICS.filter(x=>x.stage===t.stage),pi=practiceItems(t).length,pdn=practiceDone(t.id);
  const nb=S.blocks.filter(b=>b.topic===t.id&&!b.done).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.start-b.start)[0];
  const stIcon={new:'○',wip:'◐',done:'✓',redo:'↻'};
- const hero='<div class="card thero"><div class="thmain"><div class="small mute">Этап '+t.stage+' · '+esc(STAGES[t.stage].title)+' · тема '+(sameStage.indexOf(t)+1)+' из '+sameStage.length+'</div>'
+ const hero='<div class="card thero"><div class="thmain"><div class="small mute">'+esc(SBY[t.stack].title)+' · '+esc(chName(STAGES[t.stage]))+' · тема '+(sameStage.indexOf(t)+1)+' из '+sameStage.length+'</div>'
   +'<h1>'+esc(t.title)+'</h1>'
-  +'<div class="tmeta"><span class="chip">'+DIFF[t.diff]+' '+DIFF_T[t.diff]+'</span><span class="chip">'+(t.req?'обязательная':'желательная')+'</span><span class="chip">блоков: '+t.blocks+' · ~'+Math.round(t.blocks*50/60*10)/10+' ч</span>'+(t.d?'<span class="chip ok">есть конспект</span>':'')+'</div>'
-  +'<div class="seg" role="group" aria-label="Статус темы">'+['new','wip','done','redo'].map(k=>'<button class="seg-b s-'+k+(st===k?' on':'')+'" data-act="status" data-id="'+t.id+'" data-st="'+k+'" aria-pressed="'+(st===k)+'"><span>'+stIcon[k]+'</span> '+STAT[k]+'</button>').join('')+'</div></div>'
-  +'<div class="thside"><div class="small mute">Практика</div>'
-  +(pi?progressBar(pdn/pi*100)+'<div class="small">'+pdn+' из '+pi+' заданий · <a href="#t-'+t.id+'" data-act="tab" data-tab="task">открыть</a></div>':'<div class="small mute">заданий нет</div>')
+  +'<div class="tmeta"><span class="chip">'+DIFF[t.diff]+' '+DIFF_T[t.diff]+'</span><span class="chip'+(isLater(t)?' later':'')+'">'+(isLater(t)?'Можно позже':'Срочная')+'</span><span class="chip">блоков: '+t.blocks+' · ~'+Math.round(t.blocks*50/60*10)/10+' ч</span>'+(t.d?'<span class="chip ok">есть конспект</span>':'')+'</div>'
+  +'<div class="seg" role="group" aria-label="Статус темы">'+['new','wip','done','redo'].map(k=>'<button class="seg-b s-'+k+(st===k?' on':'')+'" data-act="status" data-id="'+t.id+'" data-st="'+k+'" aria-pressed="'+(st===k)+'"><span>'+stIcon[k]+'</span> '+STAT[k]+'</button>').join('')+'</div>'
+  +'<div class="row laterrow"><button class="btn sm'+(isLater(t)?' on':'')+'" data-act="later" data-id="'+t.id+'" aria-pressed="'+isLater(t)+'" title="Темы «Можно позже» не ставятся в план и не входят в проценты готовности к стажировке">'+(isLater(t)?'🕓 Можно позже · сделать срочной':'🕓 Перенести в «Можно позже»')+'</button></div></div>'
+  +'<div class="thside">'+(hasAuto(t)?progInd(t):'<div class="small mute">Практика</div>'
+  +(pi?progressBar(pdn/pi*100)+'<div class="small">'+pdn+' из '+pi+' заданий · <a href="#t-'+t.id+'" data-act="tab" data-tab="task">открыть</a></div>':'<div class="small mute">заданий нет</div>'))
   +'<div class="small mute thgap">Календарь</div>'
   +(nb?'<div class="small"><b>📅 '+fmtD(nb.date)+', '+fmtT(nb.start)+'</b></div>':'<div class="small mute">блок не запланирован</div>')
   +'<button class="btn sm" data-act="plan" data-id="'+t.id+'">'+(nb?'+ ещё блок':'Запланировать блок')+'</button></div></div>';
  const tile=(ic,ttl,txt)=>'<div class="ttile"><div class="tt"><span class="ti">'+ic+'</span><b>'+ttl+'</b></div><p>'+esc(txt)+'</p></div>';
  const tiles='<div class="ttiles">'+tile('🎯','Что понять',t.what)+tile('💡','Зачем это нужно',t.why)+tile('✅','Как проверить себя',t.verify)+'</div>';
  const bottomNav='<div class="topicnav">'+(pv?'<a class="tn prev" data-act="opennote" href="#t-'+pv.id+'"><span class="small mute">← Предыдущая тема</span><b>'+esc(pv.title)+'</b></a>':'<span></span>')+(nx?'<a class="tn next" data-act="opennote" href="#t-'+nx.id+'"><span class="small mute">Следующая тема →</span><b>'+esc(nx.title)+'</b></a>':'<span></span>')+'</div>';
- return '<div class="row topnav"><a href="#st-'+t.stage+'">← Этап '+t.stage+'. '+esc(STAGES[t.stage].title)+'</a><span class="sp"></span>'+(S.termHide?'<button class="btn sm" data-act="termtoggle">Открыть терминал</button>':'')+(pv?'<a class="btn sm" data-act="opennote" href="#t-'+pv.id+'" title="'+esc(pv.title)+'">← Предыдущая</a>':'')+(nx?'<a class="btn sm" data-act="opennote" href="#t-'+nx.id+'" title="'+esc(nx.title)+'">Следующая →</a>':'')+'</div>'
- +'<div class="tlayout'+(S.termHide?' noterm':'')+'"><div class="tcol">'+hero+tiles
+ return '<div class="row topnav"><a href="#st-'+t.stage+'">← '+esc(chName(STAGES[t.stage]))+'</a><span class="sp"></span>'+(S.termHide?'<button class="btn sm" data-act="termtoggle">Открыть терминал</button>':'')+(pv?'<a class="btn sm" data-act="opennote" href="#t-'+pv.id+'" title="'+esc(pv.title)+'">← Предыдущая</a>':'')+(nx?'<a class="btn sm" data-act="opennote" href="#t-'+nx.id+'" title="'+esc(nx.title)+'">Следующая →</a>':'')+'</div>'
+ +'<div class="tlayout'+(S.termHide?' noterm':'')+'"><div class="tcol">'+hero+videoCard(t)+tiles
  +'<div class="tabs" role="tablist">'+tabs.map(x=>'<button class="btn sm'+(topicTab===x[0]?' on':'')+'" role="tab" aria-selected="'+(topicTab===x[0])+'" data-act="tab" data-tab="'+x[0]+'">'+x[1]+'</button>').join('')+'</div>'
  +'<div class="card">'+body+'</div>'+bottomNav+'</div>'+(S.termHide?'':terminalHtml(t))+'</div>';
 }
-function topicOptions(sel){return '<option value="">— без темы —</option>'+STAGES.map(st=>'<optgroup label="Этап '+st.id+'">'+TOPICS.filter(t=>t.stage===st.id).map(t=>'<option value="'+t.id+'"'+(t.id===sel?' selected':'')+'>'+esc(t.title)+'</option>').join('')+'</optgroup>').join('')}
+// видео-урок Stepik: фрейм создаётся только по кнопке, пока не нажато, ничего не грузится
+function lessonUrl(t){return 'https://stepik.org/lesson/'+t.lesson+'/step/1'}
+function videoCard(t){
+ if(!t.lesson)return '';
+ return '<div class="card vidcard"><div class="row"><h3 class="sp" style="margin:0">▶️ Видео-урок на Stepik</h3><button class="btn sm pri" data-act="vidopen" data-id="'+t.id+'">Смотреть здесь</button><a class="btn sm" href="'+lessonUrl(t)+'" target="_blank" rel="noopener noreferrer">Открыть на Stepik</a></div>'
+  +'<p class="small mute" style="margin:6px 0 0">Урок бесплатный, Stepik может попросить войти. Если видео не показывается, открой урок на Stepik.</p><div class="vidbox" id="vidbox" hidden></div></div>';
+}
+function topicOptions(sel){return '<option value="">— без темы —</option>'+STAGES.map(st=>'<optgroup label="'+esc(SBY[st.stack].title)+' · '+esc(chName(st))+'">'+TOPICS.filter(t=>t.stage===st.id).map(t=>'<option value="'+t.id+'"'+(t.id===sel?' selected':'')+'>'+esc(t.title)+'</option>').join('')+'</optgroup>').join('')}
 // ---------- практика: задания берутся из конспекта, вводить ничего не нужно ----------
+function hasQuiz(t){return !!(t&&t.d&&t.d.quiz&&t.d.quiz.length)}
+function hasTask(t){return !!(t&&t.d&&t.d.task)}
+function hasAuto(t){return hasQuiz(t)&&hasTask(t)}
+const QUIZ_PASS=5; // верных ответов для зачёта теста
+function quizOk(id){return !!(S.quiz[id]&&S.quiz[id].passed)}
+function taskOk(id){return !!(S.taskDone[id]&&S.taskDone[id].passed)}
+// два индикатора: тест и практика; тема освоена автоматически, когда пройдены оба
+function progInd(t){
+ const q=S.quiz[t.id],k=S.taskDone[t.id],n=t.d.quiz.length;
+ const row=(name,ok,txt,tab)=>'<div class="pind'+(ok?' ok':'')+'"><span class="pi-ic">'+(ok?'✓':'○')+'</span><div><b>'+name+':</b> '+txt+' · <a href="#t-'+t.id+'" data-act="tab" data-tab="'+tab+'">открыть</a></div></div>';
+ return '<div class="small mute">Что нужно для освоения</div>'
+  +row('Тест',q&&q.passed,q?(q.passed?'пройден':'не пройден')+' ('+q.best+' из '+n+')':'не пройден','quiz')
+  +row('Практика',k&&k.passed,k&&k.passed?'пройдена':(k&&k.tries?'не пройдена, попыток: '+k.tries:'не пройдена'),'task')
+  +'<div class="small mute pind-note">Когда пройдены оба пункта, тема отмечается освоенной сама.</div>';
+}
+// статус подстраивается под тест и практику
+function afterProgress(id){
+ const t=TBY[id];if(!t||!hasAuto(t))return;
+ const q=quizOk(id),k=taskOk(id),st=topicStatus(id);
+ if(q&&k){if(st!=='done')setStatus(id,'done')}
+ else if((q||k)&&st==='new')setStatus(id,'wip');
+}
 function practiceItems(t){
+ if(hasTask(t))return ['Практика с автопроверкой: решить задачу, чтобы прошли все проверки'];
  const bl=t.d?t.d.b:[];
  const pick=re=>{let r=null;bl.forEach((b,i)=>{if(b[0]==='h'&&re.test(b[1])&&bl[i+1]&&bl[i+1][0]==='ol')r=bl[i+1][1]});return r};
  const own=pick(/практик/i)||pick(/как делать|задани/i);
  if(own&&own.length)return own;
  return ['Разобрать тему: '+esc(t.what),'Проверить себя: '+esc(t.verify)];
 }
-function practiceDone(id){return Object.keys(S.practice[id]||{}).filter(k=>S.practice[id][k]).length}
-function practiceTotal(){return Object.keys(S.practiceAt).length}
+function practiceDone(id){if(hasTask(TBY[id]))return taskOk(id)?1:0;return Object.keys(S.practice[id]||{}).filter(k=>S.practice[id][k]).length}
+function practiceTotal(){return Object.keys(S.practiceAt).length+Object.keys(S.taskDone).filter(k=>S.taskDone[k]&&S.taskDone[k].passed).length}
 function practiceList(t){
  const items=practiceItems(t),st=S.practice[t.id]||{};
  return '<div class="plist">'+items.map((x,i)=>'<label class="pitem'+(st[i]?' on':'')+'"><input type="checkbox" data-act="ptoggle" data-id="'+t.id+'" data-i="'+i+'"'+(st[i]?' checked':'')+'><span class="ptxt"><b>'+(i+1)+'.</b> '+x+'</span></label>').join('')+'</div>';
 }
 function practiceBlock(t){
+ if(hasTask(t))return '<p>У этой темы практика с автопроверкой. <a href="#t-'+t.id+'" data-act="openpractice">Открыть задание</a>'+(taskOk(t.id)?' (уже пройдено ✓)':'')+'</p>';
  const n=practiceItems(t).length,d=practiceDone(t.id),all=d>=n;
  return '<div class="row"><b class="sp">Выполнено '+d+' из '+n+'</b><span class="chip">'+DIFF[t.diff]+' '+DIFF_T[t.diff]+'</span></div>'+progressBar(d/n*100)
   +'<p class="small mute pverify"><b>Как проверить:</b> '+esc(t.verify)+'</p>'
@@ -457,6 +577,94 @@ function practiceBlock(t){
   +(all&&topicStatus(t.id)!=='done'?'<div class="callout"><b>Все задания выполнены.</b> Если можешь объяснить тему без подсказок, отметь её освоенной.<p><button class="btn pri sm" data-act="status" data-id="'+t.id+'" data-st="done">Отметить тему освоенной</button></p></div>':'')
   +(all&&topicStatus(t.id)==='done'?'<p class="small mute">Тема освоена. Повторения поставлены автоматически.</p>':'');
 }
+
+// ---------- тест ----------
+const quizSt={}; // {id:{ans:[],checked:bool}} в памяти страницы
+function quizBlock(t){
+ if(!hasQuiz(t))return '<div class="callout">Тест появится вместе с конспектом темы.</div>';
+ const qs=t.d.quiz,st=quizSt[t.id]||(quizSt[t.id]={ans:[],checked:false}),rec=S.quiz[t.id];
+ let score=0;if(st.checked)qs.forEach((q,i)=>{if(st.ans[i]===q[2])score++});
+ const head='<div class="row"><b class="sp">Тест по теме: '+qs.length+' вопросов</b><span class="chip">зачёт: '+QUIZ_PASS+' из '+qs.length+'</span></div>'
+  +(rec?'<p class="small mute">Лучший результат: <b>'+rec.best+' из '+qs.length+'</b>'+(rec.passed?' · тест пройден ✓':' · пока не пройден')+'</p>':'<p class="small mute">Выбери по одному ответу в каждом вопросе и нажми «Проверить».</p>');
+ const body=qs.map((q,i)=>{
+  const sel=st.ans[i];
+  return '<div class="qz'+(st.checked?(sel===q[2]?' good':' bad'):'')+'"><div class="qq"><b>'+(i+1)+'.</b> '+esc(q[0])+'</div>'
+   +q[1].map((o,j)=>'<label class="qopt'+(st.checked?(j===q[2]?' right':(j===sel?' wrong':'')):'')+'"><input type="radio" name="qz'+i+'" data-act="qpick" data-id="'+t.id+'" data-i="'+i+'" value="'+j+'"'+(sel===j?' checked':'')+(st.checked?' disabled':'')+'><span>'+esc(o)+'</span></label>').join('')
+   +(st.checked?'<div class="qexp"><b>'+(sel===q[2]?'Верно.':'Неверно.')+'</b> '+esc(q[3])+'</div>':'')+'</div>';
+ }).join('');
+ const res=st.checked?'<div class="callout qres '+(score>=QUIZ_PASS?'okbox':'')+'"><b>Результат: '+score+' из '+qs.length+'.</b> '+(score>=QUIZ_PASS?'Тест пройден ✓':'Нужно хотя бы '+QUIZ_PASS+'. Перечитай конспект и попробуй ещё раз.')+'</div>':'';
+ const btns=st.checked?'<button class="btn pri" data-act="quizreset" data-id="'+t.id+'">Пересдать</button>':'<button class="btn pri" data-act="quizcheck" data-id="'+t.id+'">Проверить</button>';
+ return head+body+res+'<p>'+btns+'</p>';
+}
+function quizCheck(id){
+ const t=TBY[id],st=quizSt[id]||(quizSt[id]={ans:[],checked:false}),qs=t.d.quiz;
+ for(let i=0;i<qs.length;i++)if(typeof st.ans[i]!=='number'){toast('Ответь на все вопросы: пропущен вопрос '+(i+1));return}
+ st.checked=true;let score=0;qs.forEach((q,i)=>{if(st.ans[i]===q[2])score++});
+ const prev=S.quiz[id]||{best:0,passed:false},best=Math.max(prev.best||0,score);
+ S.quiz[id]={best,passed:prev.passed||score>=QUIZ_PASS,at:todayS(),last:score};
+ save();afterProgress(id);rerender();
+}
+// ---------- практика с автопроверкой ----------
+const taskSt={}; // {id:{html,show,hint,running}} в памяти страницы
+function taskBlock(t){
+ const k=t.d.task,td=S.taskDone[t.id],st=taskSt[t.id]||(taskSt[t.id]={}),code=S.taskCode[t.id]!=null?S.taskCode[t.id]:k.starter;
+ const tries=td?td.tries||0:0;
+ return '<div class="row"><b class="sp">Практика с проверкой</b>'+(td&&td.passed?'<span class="chip ok">пройдена ✓</span>':'<span class="chip warn">не пройдена</span>')+(tries?'<span class="chip">попыток: '+tries+'</span>':'')+'</div>'
+  +'<div class="tasktxt">'+k.text+'</div>'
+  +'<label for="tasked">Твоё решение (Go)</label><div class="edwrap taskwrap"><pre class="gut" id="tgut" aria-hidden="true"></pre><textarea id="tasked" data-id="'+t.id+'" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Решение на Go">'+esc(code)+'</textarea></div>'
+  +'<div class="row taskbar"><button class="btn pri" data-act="taskrun" data-id="'+t.id+'" id="taskbtn"'+(st.running?' disabled':'')+'>Проверить решение</button><button class="btn" data-act="taskreset" data-id="'+t.id+'">Сбросить</button>'
+  +(k.hint?'<button class="btn ghost" data-act="taskhint" data-id="'+t.id+'">Подсказка</button>':'')
+  +(k.solution?'<button class="btn ghost" data-act="taskshow" data-id="'+t.id+'"'+(tries?'':' disabled title="Сначала попробуй решить сама: решение откроется после первой проверки"')+'>'+(st.show?'Скрыть решение':'Показать решение')+'</button>':'')+'</div>'
+  +(st.hint&&k.hint?'<div class="callout"><b>Подсказка.</b> '+k.hint+'</div>':'')
+  +'<div id="taskres" class="taskres" aria-live="polite">'+(st.running?'<span class="term-st run">Проверяю: запуски идут на онлайн-компиляторе, это может занять до минуты…</span>':(st.html||''))+'</div>'
+  +(st.show&&k.solution?'<h3>Решение</h3><pre><code>'+esc(k.solution)+'</code></pre><p class="small mute">Сравни со своим: у задачи бывает несколько верных решений.</p>':'');
+}
+const nz=x=>String(x==null?'':x).replace(/\r/g,'').split('\n').map(l=>l.replace(/\s+$/,'')).join('\n').replace(/\n+$/,'').replace(/^\n+/,'');
+async function wbRun(code,stdin){
+ const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),120000);
+ try{
+  const r=await fetch(RUN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({compiler:await getCompiler(),code,stdin:stdin||'',save:false}),signal:ctl.signal});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const d=await r.json(),fix=x=>String(x||'').replace(/(\.\/)?prog\.go/g,'main.go');
+  const cerr=fix(d.compiler_error||d.compiler_message).trim(),pout=fix(d.program_output),perr=fix(d.program_error);
+  const status=String(d.status||'0');
+  // ошибка компиляции: программа не запускалась (нет ни вывода, ни сообщения программы) и статус не 0
+  const compileFail=!!cerr&&status!=='0'&&!d.program_output&&!d.program_error&&!d.program_message;
+  return {cerr:compileFail?cerr:'',out:pout,err:perr,status,signal:d.signal||''};
+ }catch(e){return {net:e.name==='AbortError'?'Время ожидания вышло (2 минуты). Онлайн-компилятор сейчас медленный или программа зациклилась.':'Не удалось связаться с онлайн-компилятором. Проверь интернет и попробуй позже.'}}
+ finally{clearTimeout(to)}
+}
+async function taskRun(id){
+ const t=TBY[id],k=t.d.task,ta=$('#tasked'),st=taskSt[id]||(taskSt[id]={});if(!ta||st.running)return;
+ const code=ta.value;S.taskCode[id]=code;save();
+ if(!code.trim()){toast('Сначала напиши решение');return}
+ st.running=true;st.html='';const btn=$('#taskbtn'),res=$('#taskres');if(btn)btn.disabled=true;if(res)res.innerHTML='<span class="term-st run">Проверяю: запуски идут на онлайн-компиляторе, это может занять до минуты…</span>';
+ const rows=[];let pass=0,fatal='';
+ for(let i=0;i<k.checks.length;i++){
+  const c=k.checks[i],pr=$('#taskres');if(pr)pr.innerHTML='<span class="term-st run">Проверка '+(i+1)+' из '+k.checks.length+': запуск на онлайн-компиляторе, это может занять до минуты…</span>';
+  const r=await wbRun(code,c.in); // по одному: параллельные запуски Wandbox не выдерживает
+  if(r.net){fatal='<p>'+esc(r.net)+'</p>';break}
+  if(r.cerr){fatal='<b>Ошибка компиляции.</b><pre class="out bad"><code>'+esc(r.cerr)+'</code></pre>';break}
+  const got=nz(r.out+(r.status!=='0'||r.signal?(r.out&&!/\n$/.test(r.out)?'\n':'')+r.err:'')),ok=r.status==='0'&&!r.signal&&got===nz(c.out);
+  if(ok)pass++;
+  rows.push('<details class="trow '+(ok?'ok':'bad')+'"'+(ok?'':' open')+'><summary><b>'+(ok?'✓':'✗')+' Проверка '+(i+1)+'</b>'+(ok?'':' · не совпало')+'</summary>'
+   +'<div class="small mute">Ввод:</div><pre><code>'+esc(c.in||'(пусто)')+'</code></pre>'
+   +'<div class="small mute">Ожидалось:</div><pre class="out"><code>'+esc(nz(c.out))+'</code></pre>'
+   +(ok?'':'<div class="small mute">Получилось'+(r.status!=='0'?' (программа упала, код '+esc(r.status)+')':'')+':</div><pre class="out bad"><code>'+esc(got||'(пусто)')+'</code></pre>')+'</details>');
+ }
+ st.running=false;
+ if(fatal){st.html='<div class="callout">'+fatal+'</div>';
+  if(!/Ошибка компиляции/.test(fatal)){rerender();return} // сеть: попытка не считается
+ }
+ const rec=S.taskDone[id]||{passed:false,tries:0};
+ rec.tries=(rec.tries||0)+1;rec.at=todayS();
+ const all=!fatal&&pass===k.checks.length;
+ if(all)rec.passed=true;
+ S.taskDone[id]=rec;save();
+ if(!fatal)st.html='<div class="callout qres '+(all?'okbox':'')+'"><b>Пройдено проверок: '+pass+' из '+k.checks.length+'.</b> '+(all?'Практика засчитана ✓':'Посмотри, где не совпало, поправь и проверь снова.')+'</div>'+rows.join('');
+ afterProgress(id);rerender();
+}
+
 let taskFilter='all';
 function vTasks(){
  const t0=todayS(),nt=nextTopic(),todayBlocks=S.blocks.filter(b=>b.date===t0&&isGo(b)).sort((a,b)=>a.start-b.start);
@@ -465,7 +673,7 @@ function vTasks(){
  h+='<div class="card"><h3>Практика на сегодня</h3>'
   +(isWE(t0)?'<p class="mute">Сегодня выходной, занятий по плану нет.</p>':
     (todayBlocks.length?'<p class="small mute">По календарю: '+todayBlocks.map(b=>fmtT(b.start)+' '+esc(b.title)).join('; ')+'</p>':'<p class="small mute">Блоков на сегодня в календаре нет.</p>'))
-  +(nt?'<p><a class="nolink" href="#t-'+nt.id+'" data-act="openpractice"><b>'+esc(nt.title)+'</b></a> <span class="small mute">Этап '+nt.stage+'</span></p>'+practiceBlock(nt)
+  +(nt?'<p><a class="nolink" href="#t-'+nt.id+'" data-act="openpractice"><b>'+esc(nt.title)+'</b></a> <span class="small mute">'+esc(chName(STAGES[nt.stage]))+'</span></p>'+practiceBlock(nt)
      +'<p><a class="btn sm" href="#t-'+nt.id+'" data-act="openpractice">Открыть тему</a></p>':'<p>Все темы пройдены.</p>')
   +'</div>';
  const fl=[['all','Все'],['todo','Не выполнено'],['done','Выполнено']];
@@ -475,7 +683,7 @@ function vTasks(){
   const rows=ts.filter(t=>{const n=practiceItems(t).length,d=practiceDone(t.id);return taskFilter==='all'||(taskFilter==='done'?d>=n:d<n)});
   if(!rows.length)return '';
   const sn=ts.reduce((a,t)=>a+practiceItems(t).length,0),sd=ts.reduce((a,t)=>a+practiceDone(t.id),0);
-  return '<div class="card"><div class="row"><h3 class="sp" style="margin:0">Этап '+st.id+'. '+esc(st.title)+'</h3><span class="small mute">'+sd+' из '+sn+'</span></div>'
+  return '<div class="card"><div class="row"><h3 class="sp" style="margin:0">'+esc(SBY[st.stack].title)+' · '+esc(chName(st))+'</h3><span class="small mute">'+sd+' из '+sn+'</span></div>'
    +rows.map(t=>{const n=practiceItems(t).length,d=practiceDone(t.id);
     return '<a class="item" href="#t-'+t.id+'" data-act="openpractice"><span class="t"><b>'+esc(t.title)+'</b><br><span class="small mute">'+DIFF[t.diff]+' · заданий: '+n+'</span></span><span class="prog">'+progressBar(d/n*100)+'<b class="pct">'+d+'/'+n+'</b></span></a>'}).join('')+'</div>';
  }).join('')||'<div class="card mute">По этому фильтру ничего нет.</div>';
@@ -494,7 +702,7 @@ function matBar(withTopics){
  return '<div class="card matbar"><input type="search" id="mq" placeholder="Поиск по названию или теме" value="'+esc(matQ)+'" aria-label="Поиск материалов">'
   +'<div class="row">'+MTYPES.filter(x=>x[0]==='all'||cnt(x[0])).map(x=>'<button class="btn sm'+(matType===x[0]?' on':'')+'" data-act="mfilter" data-k="type" data-v="'+x[0]+'">'+x[1]+' · '+cnt(x[0])+'</button>').join('')+'</div>'
   +'<div class="row"><span class="small mute">Язык:</span>'+[['all','Любой'],['ru','RU'],['en','EN']].map(x=>'<button class="btn sm'+(matLang===x[0]?' on':'')+'" data-act="mfilter" data-k="lang" data-v="'+x[0]+'">'+x[1]+'</button>').join('')
-  +'<span class="small mute">Раздел:</span><select id="mstage" aria-label="Раздел"><option value="all">Все</option><option value="base"'+(matStage==='base'?' selected':'')+'>Справочники и курсы</option>'+stages.map(i=>'<option value="'+i+'"'+(matStage===String(i)?' selected':'')+'>Этап '+i+'. '+esc(STAGES[i].title)+'</option>').join('')+'</select>'
+  +'<span class="small mute">Раздел:</span><select id="mstage" aria-label="Раздел"><option value="all">Все</option><option value="base"'+(matStage==='base'?' selected':'')+'>Справочники и курсы</option>'+STACKS.map(k=>{const o=stages.filter(i=>STAGES[i].stack===k.id);return o.length?'<optgroup label="'+esc(k.title)+'">'+o.map(i=>'<option value="'+i+'"'+(matStage===String(i)?' selected':'')+'>'+esc(chName(STAGES[i]))+'</option>').join('')+'</optgroup>':''}).join('')+'</select>'
   +'<span class="sp"></span><b class="small" id="mcount"></b><button class="btn sm ghost" data-act="mreset">Сбросить</button></div></div>';
 }
 function applyMatFilter(){
@@ -856,7 +1064,9 @@ document.addEventListener('click',e=>{
  const el=e.target.closest('[data-act]');if(!el)return;
  const a=el.dataset.act,id=el.dataset.id;
  if(['tgo','treset','tmode'].includes(a)){timerAct(a,el);return}
- if(a==='status'){const y=scrollY;setStatus(id,el.dataset.st);render();if(route==='stage')scrollTo(0,y)}
+ if(a==='vidopen'){const t=TBY[id],b=$('#vidbox');if(t&&b){b.hidden=false;b.innerHTML='<iframe src="'+lessonUrl(t)+'" title="'+esc(t.title)+'" loading="lazy" allow="fullscreen; autoplay; encrypted-media" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe>';el.hidden=true}}
+ else if(a==='later'){const t=TBY[id];if(t){S.later[id]=!isLater(t);save();if(S.later[id])S.blocks=S.blocks.filter(b=>!(isGo(b)&&b.topic===id&&!b.done&&!b.manual&&b.date>todayS()));fillPlan();const y=scrollY;render();scrollTo(0,y);toast(S.later[id]?'Тема в «Можно позже»: из плана убрана, в проценты стажировки не входит':'Тема снова срочная: добавлена в план')}}
+ else if(a==='status'){const y=scrollY;setStatus(id,el.dataset.st);render();if(route==='stage')scrollTo(0,y)}
  else if(a==='opennote'){topicTab='note';if(el.dataset.st)setStatus(id,el.dataset.st)}
  else if(a==='dlbackup'){
   const blob=new Blob([JSON.stringify(S,null,1)],{type:'application/json'}),u=URL.createObjectURL(blob),l=document.createElement('a');
@@ -882,6 +1092,12 @@ document.addEventListener('click',e=>{
  else if(a==='mreset'){matType='all';matLang='all';matStage='all';matQ='';render()}
  else if(a==='sfilter'){stageFilter=el.dataset.v;const y=scrollY;render();scrollTo(0,y)}
  else if(a==='tab'){topicTab=el.dataset.tab;render()}
+ else if(a==='quizcheck'){quizCheck(id)}
+ else if(a==='quizreset'){delete quizSt[id];rerender()}
+ else if(a==='taskrun'){taskRun(id)}
+ else if(a==='taskreset'){delete S.taskCode[id];(taskSt[id]=taskSt[id]||{}).html='';save();rerender()}
+ else if(a==='taskhint'){const s=taskSt[id]=taskSt[id]||{};s.hint=!s.hint;rerender()}
+ else if(a==='taskshow'){const s=taskSt[id]=taskSt[id]||{};s.show=!s.show;rerender()}
  else if(a==='plan'){openBlock(null,{title:'Go: '+TBY[id].title,topic:id})}
  else if(a==='revdone'){const r=S.reviews.find(x=>x.id===id);if(r){r.done=true;r.doneAt=todayS();save();render()}}
  else if(a==='bdone'){toggleBlockDone(id);rerender()}
@@ -928,7 +1144,8 @@ document.addEventListener('change',e=>{
  if(e.target.id==='ttopic'){S.timer.topic=e.target.value;save()}
  if(e.target.id==='impf'){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>doImport(String(r.result));r.readAsText(f)}
 });
-document.addEventListener('input',e=>{if(e.target.id==='quicktxt'){updateQuick();return}if(e.target.closest&&e.target.closest('form[data-form=block]'))updateBlkInfo();if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
+document.addEventListener('change',e=>{const el=e.target;if(el&&el.dataset&&el.dataset.act==='qpick'){const s=quizSt[el.dataset.id]||(quizSt[el.dataset.id]={ans:[],checked:false});s.ans[+el.dataset.i]=+el.value}});
+document.addEventListener('input',e=>{if(e.target.id==='tasked'){S.taskCode[e.target.dataset.id]=e.target.value;save();updateGutter();return}if(e.target.id==='quicktxt'){updateQuick();return}if(e.target.closest&&e.target.closest('form[data-form=block]'))updateBlkInfo();if(e.target.id==='codeed'){const tm=$('#term');if(tm){S.code[tm.dataset.id]=e.target.value;save();updateGutter()}return}if(e.target.id==='mq'){matQ=e.target.value;applyMatFilter();return}const n=e.target.dataset&&e.target.dataset.note;if(n){S.notes[n]=e.target.value;save()}});
 document.addEventListener('submit',e=>{
  const f=e.target.closest('form');if(!f)return;e.preventDefault();
  const fd=Object.fromEntries(new FormData(f).entries()),k=f.dataset.form;
@@ -988,8 +1205,8 @@ function applyTheme(){document.documentElement.dataset.theme=S.theme==='auto'?''
 const GO_WIN={ // окна для Go: по утрам работа, поэтому занятия вечером, после пар и дороги
  'Ч':{1:['17:30-21:00'],2:['19:00-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']},
  'З':{1:['17:30-21:00'],2:['17:30-21:00'],3:['17:30-21:00'],4:['17:30-21:00'],5:['19:00-21:00']}};
-const PLAN_VERSION=5; // при смене окон повышаем: план перестроится сам при следующем открытии
-const PLAN_END='2027-06-30'; // конец плана: карта на ~280 блоков занимает около пяти месяцев
+const PLAN_VERSION=7; // при смене окон повышаем: план перестроится сам при следующем открытии
+const PLAN_END='2027-12-31'; // конец плана: карта из курсов Stepik большая, плану нужен запас
 const PLAN_SKIP=['2026-12-31','2027-01-01','2027-01-04','2027-01-05','2027-01-06','2027-01-07','2027-01-08','2027-02-23','2027-03-08','2027-05-03','2027-05-10']; // праздники (примерно) // конец плана и праздничные дни
 const BLOCK_MIN=50, BLOCK_STEP=60; // блок 50 мин + 10 мин перерыв
 function planSlots(date){
@@ -1006,7 +1223,7 @@ function planSlots(date){
 function planQueue(counted){
  const q=[];
  TOPICS.forEach(t=>{
-  if(topicStatus(t.id)==='done')return;
+  if(topicStatus(t.id)==='done'||isLater(t))return; // «Можно позже» в план не ставим
   const have=S.blocks.filter(b=>isGo(b)&&b.topic===t.id&&counted(b)).length;
   for(let i=have+1;i<=t.blocks;i++)q.push({topic:t.id,title:'Go: '+t.title+(t.blocks>1?' ('+i+'/'+t.blocks+')':'')});
  });
@@ -1102,8 +1319,8 @@ function vStats(){
  h+='<div class="card"><h3>Последние блоки таймера</h3>'+(rec.length?'<div class="tw"><table><thead><tr><th>Дата</th><th>Время</th><th>Тема</th><th>Минут</th><th></th></tr></thead><tbody>'
   +rec.map(x=>'<tr><td>'+fmtD(x.date)+'</td><td>'+(x.at?pad(new Date(x.at).getHours())+':'+pad(new Date(x.at).getMinutes()):'—')+'</td><td>'+(x.topic&&TBY[x.topic]?esc(TBY[x.topic].title):'<span class="mute">без темы</span>')+'</td><td>'+x.min+'</td><td class="small mute">'+(MODE[x.mode]||esc(x.mode||''))+'</td></tr>').join('')
   +'</tbody></table></div>':'<p class="mute">Блоков ещё не было. Запусти таймер в шапке и выбери тему.</p>')+'</div>';
- h+='<div class="card"><h3>Прогресс по этапам</h3>'+STAGES.map(st=>{const ts=TOPICS.filter(x=>x.stage===st.id),d=ts.filter(x=>topicStatus(x.id)==='done').length,p=d/ts.length*100;
-  return '<a class="item" href="#st-'+st.id+'"><span class="t">Этап '+st.id+'. '+esc(st.title)+'</span><span class="prog">'+progressBar(p)+'<b class="pct">'+Math.round(p)+'%</b></span></a>'}).join('')+'</div>';
+ h+='<div class="card"><h3>Прогресс по главам</h3>'+STAGES.map(st=>{const ts=TOPICS.filter(x=>x.stage===st.id),d=ts.filter(x=>topicStatus(x.id)==='done').length,p=d/ts.length*100;
+  return '<a class="item" href="#st-'+st.id+'"><span class="t">'+esc(SBY[st.stack].title)+' · '+esc(chName(st))+'</span><span class="prog">'+progressBar(p)+'<b class="pct">'+Math.round(p)+'%</b></span></a>'}).join('')+'</div>';
  const rv=V.slice().reverse().slice(0,8);
  h+='<div class="card"><h3>Когда ты заходила на сайт</h3>'+(rv.length?'<div class="tw"><table><thead><tr><th>Дата</th><th>С</th><th>До</th><th>Активно</th></tr></thead><tbody>'
   +rv.map(v=>{const a=new Date(v.s),b=new Date(v.e);return '<tr><td>'+fmtD(iso(a))+'</td><td>'+pad(a.getHours())+':'+pad(a.getMinutes())+'</td><td>'+pad(b.getHours())+':'+pad(b.getMinutes())+'</td><td>'+fmtDur(v.sec)+'</td></tr>'}).join('')
@@ -1208,7 +1425,19 @@ function startIcons(){
 }
 
 // ---------- терминал: запуск Go через онлайн-компилятор Wandbox ----------
-const RUN_URL='https://wandbox.org/api/compile.json',RUN_COMPILER='go-1.23.2';
+const RUN_URL='https://wandbox.org/api/compile.json',RUN_LIST='https://wandbox.org/api/list.json';
+let runCompiler=null; // версия Go берётся из списка Wandbox: старые версии он убирает (go-1.23.2 пропал, терминал перестал работать)
+async function getCompiler(){
+ if(runCompiler)return runCompiler;
+ try{
+  const r=await fetch(RUN_LIST);if(!r.ok)throw new Error('HTTP '+r.status);
+  const names=(await r.json()).map(x=>x.name).filter(n=>/^go-\d+\.\d+\.\d+$/.test(n));
+  const key=n=>n.slice(3).split('.').map(Number);
+  names.sort((a,b)=>{const x=key(a),y=key(b);for(let i=0;i<3;i++)if(x[i]!==y[i])return y[i]-x[i];return 0});
+  if(names.length)runCompiler=names[0];
+ }catch(e){}
+ return runCompiler||'go-1.25.14';
+}
 const TERM_TEMPLATE='package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Привет, Go!")\n}\n';
 let termSamples=[];
 function stripTags(h){return String(h).replace(/<[^>]+>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')}
@@ -1233,7 +1462,7 @@ function starterCode(t){const sm=collectSamples(t);return sm.length?sm[0].code:T
 function terminalHtml(t){
  termSamples=collectSamples(t);
  const code=S.code[t.id]!=null?S.code[t.id]:starterCode(t);
- return '<aside class="term" id="term" data-id="'+t.id+'"><div class="term-head"><b>Терминал Go</b><span class="small mute">онлайн, Go 1.23</span><span class="sp"></span><button class="btn sm ghost" data-act="termtoggle" title="Скрыть терминал">Скрыть</button></div>'
+ return '<aside class="term" id="term" data-id="'+t.id+'"><div class="term-head"><b>Терминал Go</b><span class="small mute">онлайн, свежий Go</span><span class="sp"></span><button class="btn sm ghost" data-act="termtoggle" title="Скрыть терминал">Скрыть</button></div>'
   +'<div class="term-bar"><button class="btn sm pri" data-act="runcode" id="runbtn">▶ Запустить</button><button class="btn sm" data-act="resetcode">Сбросить</button>'
   +'<select id="termsample" aria-label="Примеры из конспекта"><option value="">Примеры из конспекта</option>'+termSamples.map((x,i)=>'<option value="'+i+'">'+esc(x.label)+'</option>').join('')+'</select></div>'
   +'<div class="edwrap"><pre class="gut" id="gut" aria-hidden="true"></pre><textarea id="codeed" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Код на Go">'+esc(code)+'</textarea></div>'
@@ -1242,17 +1471,19 @@ function terminalHtml(t){
   +'<p class="small mute term-note">При запуске код отправляется на сервер онлайн-компилятора Wandbox. Файлов и сети там нет, время выполнения ограничено.</p></aside>';
 }
 function updateGutter(){
- const ta=$('#codeed'),g=$('#gut');if(!ta||!g)return;
- const n=ta.value.split('\n').length;let t='';for(let i=1;i<=n;i++)t+=i+'\n';
- g.textContent=t;g.scrollTop=ta.scrollTop;
+ [['#codeed','#gut'],['#tasked','#tgut']].forEach(p=>{
+  const ta=$(p[0]),g=$(p[1]);if(!ta||!g)return;
+  const n=ta.value.split('\n').length;let t='';for(let i=1;i<=n;i++)t+=i+'\n';
+  g.textContent=t;g.scrollTop=ta.scrollTop;
+ });
 }
 async function runCode(){
  const ta=$('#codeed'),btn=$('#runbtn'),out=$('#termout'),st=$('#termstatus');if(!ta||!btn)return;
  const code=ta.value;if(!code.trim()){st.className='term-st bad';st.textContent='Код пустой';return}
  btn.disabled=true;st.className='term-st run';st.textContent='Выполняется…';out.textContent='';
- const t0=performance.now(),ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
+ const t0=performance.now(),ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),120000);
  try{
-  const r=await fetch(RUN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({compiler:RUN_COMPILER,code:code,stdin:($('#termin')||{}).value||'',save:false}),signal:ctl.signal});
+  const r=await fetch(RUN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({compiler:await getCompiler(),code:code,stdin:($('#termin')||{}).value||'',save:false}),signal:ctl.signal});
   if(!r.ok)throw new Error('HTTP '+r.status);
   const d=await r.json(),ms=Math.round(performance.now()-t0);
   const fix=x=>String(x||'').replace(/(\.\/)?prog\.go/g,'main.go');
@@ -1264,13 +1495,13 @@ async function runCode(){
   else{st.className='term-st ok';st.textContent='Выполнено за '+ms+' мс';out.textContent=pout||'(программа ничего не вывела)'}
  }catch(e){
   st.className='term-st bad';
-  st.textContent=e.name==='AbortError'?'Время ожидания вышло (30 с). Возможно, программа зациклилась.':'Не удалось связаться с онлайн-компилятором. Проверь интернет и попробуй позже.';
+  st.textContent=e.name==='AbortError'?'Время ожидания вышло (2 минуты). Онлайн-компилятор сейчас медленный или программа зациклилась.':'Не удалось связаться с онлайн-компилятором. Проверь интернет и попробуй позже.';
  }finally{clearTimeout(to);btn.disabled=false}
 }
 // ввод: Tab вставляет табуляцию, Enter сохраняет отступ, Ctrl+Enter запускает
 document.addEventListener('keydown',e=>{
- const ta=e.target;if(!ta||ta.id!=='codeed')return;
- if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();runCode();return}
+ const ta=e.target;if(!ta||(ta.id!=='codeed'&&ta.id!=='tasked'))return;
+ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();if(ta.id==='tasked')taskRun(ta.dataset.id);else runCode();return}
  if(e.key==='Tab'){e.preventDefault();ta.setRangeText('\t',ta.selectionStart,ta.selectionEnd,'end');ta.dispatchEvent(new Event('input',{bubbles:true}));return}
  if(e.key==='Enter'&&!e.shiftKey){
   e.preventDefault();
@@ -1280,7 +1511,7 @@ document.addEventListener('keydown',e=>{
  }
 });
 document.addEventListener('scroll',e=>{const c=e.target;if(c&&c.classList&&c.classList.contains('calwrap')){calScroll=c.scrollTop;calScrollX=c.scrollLeft}},true);
-document.addEventListener('scroll',e=>{if(e.target&&e.target.id==='codeed'){const g=$('#gut');if(g)g.scrollTop=e.target.scrollTop}},true);
+document.addEventListener('scroll',e=>{if(e.target&&(e.target.id==='codeed'||e.target.id==='tasked')){const g=$(e.target.id==='codeed'?'#gut':'#tgut');if(g)g.scrollTop=e.target.scrollTop}},true);
 
 // ---------- быстрое добавление дел текстом ----------
 const QWD={'пн':1,'пон':1,'понедельник':1,'вт':2,'вторник':2,'ср':3,'среда':3,'среду':3,'чт':4,'четверг':4,'пт':5,'пятница':5,'пятницу':5,'сб':6,'суббота':6,'субботу':6,'вс':7,'воскресенье':7};
@@ -1366,7 +1597,10 @@ function applyQuick(text){
 function init(){
  applyTheme();banner();
  startIcons();
- if((S.planV||0)<PLAN_VERSION)fillPlan();
+ if((S.planV||0)<PLAN_VERSION){ // «Можно позже»: будущие автоматические блоки таких тем уходят из плана
+  S.blocks=S.blocks.filter(b=>!(isGo(b)&&!b.done&&!b.manual&&b.date>todayS()&&TBY[b.topic]&&isLater(TBY[b.topic])));
+  fillPlan();
+ }
  startVisit();setInterval(beat,5000);setInterval(()=>{if(route==='calendar')updateNowLine()},60000);
  setInterval(()=>{if(route==='home'){const c=document.getElementById('todaycard');if(c)c.outerHTML=todayCard()}},30000);
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});

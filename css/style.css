@@ -467,3 +467,87 @@ a.dot:hover{transform:scale(1.35);opacity:1}
 .calbar .wbar{display:inline-block;width:90px;margin-left:8px}
 .dayh{top:var(--navh,57px)}
 @media (max-width:900px){.dayh{top:0}}
+
+/* стеки на карте и видео-урок */
+.ppath{flex-wrap:wrap}
+.pseg{min-width:70px;padding:0 8px;white-space:nowrap}
+.pseg span{overflow:hidden;text-overflow:ellipsis}
+.mstacks{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin:8px 0 16px}
+.mstack{margin:0;display:flex;flex-direction:column;gap:10px;transition:border-color .2s,transform .2s}
+.mstack:hover{border-color:var(--acc);transform:translateY(-1px)}
+.mstack.cur{border-color:var(--acc);box-shadow:0 4px 18px rgba(15,123,138,.15)}
+.mstack .row{align-items:center}
+.mstack .progress{flex:1}
+.mstic{font-size:28px;margin-right:10px;line-height:1}
+.mstack .mact{margin-top:auto}
+.vidcard{margin-bottom:14px}
+.vidbox{margin-top:12px}
+.vidbox iframe{display:block;width:100%;height:520px;border:1px solid var(--line);border-radius:10px;background:#000}
+@media (max-width:640px){.mstacks{grid-template-columns:1fr}.vidbox iframe{height:300px}.ppath{gap:4px}.pseg{min-width:56px;font-size:11px}}
+.shtxt .btn,.mact .btn{display:inline-block;white-space:normal;height:auto;line-height:1.3;text-align:left;max-width:100%}
+.mstack>.row:first-child{flex-wrap:wrap;gap:6px 10px}
+.mstack>.row:first-child .sp{min-width:140px}
+@media (max-width:640px){.mstack>.row:first-child .mbadge{order:3}}
+
+/* ===== определения, код с разбором по строкам, тест, практика с проверкой ===== */
+.def{border:1px solid var(--line);border-left:5px solid var(--acc);background:var(--accsoft);border-radius:10px;padding:12px 14px;margin:10px 0 16px}
+.def .dhead{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--acc);margin-bottom:4px}
+.def .dbody{font-size:16px;line-height:1.6}
+.def .dbody code{background:var(--card)}
+.lines{margin:10px 0}
+.lines pre.lcode{margin:0;padding:10px 0;counter-reset:ln;border-radius:10px 10px 0 0}
+.lines pre.lcode code{display:block;min-width:max-content}
+.lines .ln{display:block;counter-increment:ln;padding:0 12px 0 0;white-space:pre}
+.lines .ln::before{content:counter(ln);display:inline-block;width:38px;margin-right:12px;padding-right:8px;text-align:right;color:#5f6e76;border-right:1px solid #2a343a;user-select:none}
+.lexpl{border:1px solid var(--line);border-top:0;border-radius:0 0 10px 10px;background:var(--card);padding:10px 12px}
+.lexpl .lhead{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin-bottom:6px}
+.lexpl ol{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.lexpl li{display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;align-items:start}
+.lexpl .lref{font:600 12.5px/1.6 ui-monospace,Menlo,Consolas,monospace;background:var(--accsoft);color:var(--acc);border-radius:6px;padding:1px 8px;white-space:nowrap}
+.lexpl .ltxt{min-width:0;overflow-wrap:anywhere}
+@media (max-width:560px){.lexpl li{grid-template-columns:1fr}.lexpl .lref{justify-self:start}}
+.qz{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--card)}
+.qz.good{border-color:var(--ok)}.qz.bad{border-color:var(--bad)}
+.qz .qq{margin-bottom:6px}
+.qopt{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;margin:4px 0;border:1px solid transparent;border-radius:8px;cursor:pointer;color:var(--ink);font-size:16px}
+.qopt:hover{background:var(--accsoft)}
+.qopt input{margin-top:5px}
+.qopt.right{background:var(--oksoft);border-color:var(--ok)}
+.qopt.wrong{background:var(--warnsoft);border-color:var(--bad)}
+.qexp{font-size:14px;margin-top:6px;color:var(--mute)}
+.qres{margin:12px 0}.qres.okbox{border-left-color:var(--ok);background:var(--oksoft)}
+.tasktxt{margin:8px 0 12px}
+.taskwrap .gut{height:260px}
+.taskwrap textarea{flex:1;height:260px;min-width:0;background:transparent;color:#e6edf0;border:0;resize:vertical;font:13.5px/1.55 ui-monospace,Menlo,Consolas,monospace;padding:12px;white-space:pre;overflow:auto;tab-size:4}
+.taskbar{margin:10px 0;gap:8px;flex-wrap:wrap}
+.taskres{margin:8px 0}
+.trow{margin:6px 0}
+.trow.ok{border-color:var(--ok)}.trow.bad{border-color:var(--bad)}
+.trow summary{cursor:pointer}
+pre.out.bad{background:var(--warnsoft);border-left-color:var(--bad)}
+.pind{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:14px}
+.pind .pi-ic{display:inline-flex;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);align-items:center;justify-content:center;font-size:12px;flex:none;margin-top:1px;color:var(--mute)}
+.pind.ok .pi-ic{background:var(--ok);border-color:var(--ok);color:#fff}
+.pind-note{margin-top:2px}
+/* готовность к первой стажировке, «Можно позже» */
+.hready{margin-top:14px;background:linear-gradient(135deg,var(--accsoft),var(--card) 70%)}
+.hr-top{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.hready .ring{width:132px;height:132px}
+.hr-main{flex:1;min-width:240px}
+.hr-h{margin:2px 0 10px;font-size:22px}
+.hr-nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 24px}
+.hr-n b{display:block;font-size:24px;font-variant-numeric:tabular-nums;line-height:1.2}
+.hr-msg{display:inline-block;margin-top:10px;padding:3px 12px;border-radius:99px;font-size:13px;font-weight:600;background:var(--oksoft);color:var(--ok)}
+.hr-msg.warn{background:var(--warnsoft);color:var(--warn)}
+.hr-q{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);font-size:12px;cursor:help;color:var(--mute);margin-left:4px}
+.hr-stacks{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 22px;margin-top:16px}
+.hr-s{display:block;color:inherit;text-decoration:none}
+.hr-s .row{margin-bottom:4px}
+.hr-foot{margin-top:14px;align-items:center;gap:12px}
+.chip.later{background:var(--line);color:var(--mute)}
+.tc.later{opacity:.62}.tc.later:hover{opacity:1}
+.dot.later{border-style:dashed;border-color:var(--line);background:transparent;opacity:.7}
+.dot.later.s-done{border-style:solid;border-color:#2e7d32;background:#2e7d32}
+.laterrow{margin:10px 0 0}
+.laterrow .btn.on{background:var(--line);color:var(--mute)}
+@media (max-width:560px){.hready .ring{width:104px;height:104px}.hr-h{font-size:19px}.hr-n b{font-size:21px}}
